@@ -8,6 +8,7 @@ import {
   NECK_TYPES,
   SLEEVE_TYPES,
   SLEEVE_LENGTHS,
+  unwrap,
   type ItemMeasurement,
   type MeasurementOption,
 } from "@/lib/measurements";
@@ -39,20 +40,21 @@ export default function MeasurementModal({ itemName, initial, hasDraft, onClose,
   const [customNeck, setCustomNeck] = useState("");
   // True only for the very first neck screen of a new measurement (Cancel closes; later it's Back).
   const [firstPick, setFirstPick] = useState(!hasDraft);
-  const [extraOptions, setExtraOptions] = useState<MeasurementOption[]>([]);
+  // null until loaded (or if loading fails) -> fall back to the built-in lists
+  const [dbOptions, setDbOptions] = useState<MeasurementOption[] | null>(null);
 
-  // Options added from the Measurements tab (best-effort: built-ins still work if this fails)
+  // Options managed from the Measurements tab
   useEffect(() => {
-    fetchMeasurementOptions().then(setExtraOptions).catch(() => {});
+    fetchMeasurementOptions()
+      .then((r) => setDbOptions(unwrap(r)))
+      .catch(() => {});
   }, []);
 
-  const withExtras = (kind: MeasurementOption["kind"], base: readonly string[]) => [
-    ...base,
-    ...extraOptions.filter((o) => o.kind === kind && !base.includes(o.name)).map((o) => o.name),
-  ];
-  const necks = useMemo(() => withExtras("neck", NECK_TYPES), [extraOptions]); // eslint-disable-line react-hooks/exhaustive-deps
-  const sleeveTypes = useMemo(() => withExtras("sleeve_type", SLEEVE_TYPES), [extraOptions]); // eslint-disable-line react-hooks/exhaustive-deps
-  const sleeveLengths = useMemo(() => withExtras("sleeve_length", SLEEVE_LENGTHS), [extraOptions]); // eslint-disable-line react-hooks/exhaustive-deps
+  const listFor = (kind: MeasurementOption["kind"], fallback: readonly string[]) =>
+    dbOptions ? dbOptions.filter((o) => o.kind === kind).map((o) => o.name) : [...fallback];
+  const necks = useMemo(() => listFor("neck", NECK_TYPES), [dbOptions]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sleeveTypes = useMemo(() => listFor("sleeve_type", SLEEVE_TYPES), [dbOptions]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sleeveLengths = useMemo(() => listFor("sleeve_length", SLEEVE_LENGTHS), [dbOptions]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const set = <K extends keyof ItemMeasurement>(k: K, v: ItemMeasurement[K]) => setData((d) => ({ ...d, [k]: v }));
 

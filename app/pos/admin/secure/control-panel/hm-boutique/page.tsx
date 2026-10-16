@@ -92,7 +92,7 @@ import Coupons from "@/app/components/Coupons";
 import OutstandingCredits from "@/app/components/OutstandingCredits";
 import Measurements from "@/app/components/Measurements";
 import MeasurementModal from "@/app/components/MeasurementModal";
-import { emptyItemMeasurement, hasMeasurementData, type ItemMeasurement, type MeasurementLine } from "@/lib/measurements";
+import { emptyItemMeasurement, hasMeasurementData, unwrap, type ItemMeasurement, type MeasurementLine } from "@/lib/measurements";
 import LowStockAlarmModal from "@/app/components/LowStockAlarmModal";
 import OverdueTaskAlarmModal from "@/app/components/OverdueTaskAlarmModal";
 import StockAdjustmentModal from "@/app/components/StockAdjustmentModal";
@@ -1036,14 +1036,14 @@ export default function POSBilling() {
     });
     if (lines.length === 0) return;
     try {
-      await createMeasurementOrder({
+      unwrap(await createMeasurementOrder({
         invoice_no: invoiceNo,
         order_kind: kind,
         customer_name: customerName.trim() || "Guest",
         phone: customerPhone,
         address: customerAddress.trim(),
         items: lines,
-      });
+      }));
       setMeasurementsRefresh((n) => n + 1);
     } catch (e) {
       console.error("Saving measurements failed:", e);

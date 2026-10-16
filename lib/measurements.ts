@@ -80,18 +80,35 @@ export const OPTION_KINDS: { kind: OptionKind; title: string; builtIn: readonly 
 
 export type MeasurementPeriod = 'all' | 'today' | 'week' | 'month' | 'year';
 
-/** Start of the period in local time (week starts Monday). `null` = no lower bound. */
-export function periodStart(period: MeasurementPeriod, now = new Date()): Date | null {
-  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (period === 'today') return d;
+/** Local-time YYYY-MM-DD (never toISOString, which shifts the day in IST). */
+export function toYmd(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Date range (inclusive, YYYY-MM-DD) a period button stands for. Week runs Monday-Sunday.
+ * "all" has no bounds (empty strings).
+ */
+export function periodRange(period: MeasurementPeriod, now = new Date()): { from: string; to: string } {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (period === 'today') return { from: toYmd(today), to: toYmd(today) };
   if (period === 'week') {
-    const dow = (d.getDay() + 6) % 7; // Monday = 0
-    d.setDate(d.getDate() - dow);
-    return d;
+    const mon = new Date(today);
+    mon.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+    const sun = new Date(mon);
+    sun.setDate(mon.getDate() + 6);
+    return { from: toYmd(mon), to: toYmd(sun) };
   }
-  if (period === 'month') return new Date(now.getFullYear(), now.getMonth(), 1);
-  if (period === 'year') return new Date(now.getFullYear(), 0, 1);
-  return null;
+  if (period === 'month') {
+    return {
+      from: toYmd(new Date(today.getFullYear(), today.getMonth(), 1)),
+      to: toYmd(new Date(today.getFullYear(), today.getMonth() + 1, 0)),
+    };
+  }
+  if (period === 'year') {
+    return { from: toYmd(new Date(today.getFullYear(), 0, 1)), to: toYmd(new Date(today.getFullYear(), 11, 31)) };
+  }
+  return { from: '', to: '' };
 }
 
 export function emptyItemMeasurement(): ItemMeasurement {
@@ -117,4 +134,15 @@ export function hasMeasurementData(m: ItemMeasurement): boolean {
       m.remarks.some((r) => r.trim()) ||
       Object.values(m.measurements).some((v) => String(v).trim()),
   );
+}
+
+/**
+ * Measurement server actions return this instead of throwing: Next.js hides thrown server
+ * errors in production ("Minified React error #441"), which would hide the real reason.
+ */
+export type ActionResult<T> = { success: true; data: T } | { success: false; error: string };
+
+export function unwrap<T>(r: ActionResult<T>): T {
+  if (!r.success) throw new Error(r.error);
+  return r.data;
 }

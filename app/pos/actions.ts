@@ -4,7 +4,7 @@ import { dbStore } from "@/lib/dbStore";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { validateCoupon } from "@/lib/services/couponService";
 import { measurementStore } from "@/lib/measurementStore";
-import type { MeasurementOption, MeasurementOrder, MeasurementOrderInput, MeasurementStatus, OptionKind } from "@/lib/measurements";
+import type { ActionResult, MeasurementOption, MeasurementOrder, MeasurementOrderInput, MeasurementStatus, OptionKind } from "@/lib/measurements";
 import { Product, OrderWithRelations, CartItem, Expense, PaymentMode, Category, AdvanceOrderWithRelations, AdvanceOrderStatus } from "@/lib/types";
 
 // Helper to serialize Date objects from Postgres to strings
@@ -375,31 +375,43 @@ export async function saveStoreSettings(settings: {
   }
 }
 
-// Measurements
-export async function fetchMeasurements(): Promise<MeasurementOrder[]> {
-  return serialize(await measurementStore.list());
+// Measurements (errors are returned, not thrown, so production shows the real message)
+async function guard<T>(fn: () => Promise<T>): Promise<ActionResult<T>> {
+  try {
+    return { success: true, data: serialize(await fn()) };
+  } catch (e) {
+    return { success: false, error: (e as Error)?.message || "Unexpected error" };
+  }
 }
 
-export async function createMeasurementOrder(input: MeasurementOrderInput): Promise<MeasurementOrder> {
-  return serialize(await measurementStore.create(input));
+export async function fetchMeasurements(): Promise<ActionResult<MeasurementOrder[]>> {
+  return guard(() => measurementStore.list());
 }
 
-export async function updateMeasurementStatus(id: string, status: MeasurementStatus): Promise<void> {
-  return await measurementStore.setStatus(id, status);
+export async function createMeasurementOrder(input: MeasurementOrderInput): Promise<ActionResult<MeasurementOrder>> {
+  return guard(() => measurementStore.create(input));
 }
 
-export async function removeMeasurement(id: string): Promise<void> {
-  return await measurementStore.remove(id);
+export async function updateMeasurementStatus(id: string, status: MeasurementStatus): Promise<ActionResult<void>> {
+  return guard(() => measurementStore.setStatus(id, status));
 }
 
-export async function fetchMeasurementOptions(): Promise<MeasurementOption[]> {
-  return serialize(await measurementStore.listOptions());
+export async function removeMeasurement(id: string): Promise<ActionResult<void>> {
+  return guard(() => measurementStore.remove(id));
 }
 
-export async function createMeasurementOption(kind: OptionKind, name: string): Promise<MeasurementOption> {
-  return serialize(await measurementStore.addOption(kind, name));
+export async function fetchMeasurementOptions(): Promise<ActionResult<MeasurementOption[]>> {
+  return guard(() => measurementStore.listOptions());
 }
 
-export async function removeMeasurementOption(id: string): Promise<void> {
-  return await measurementStore.removeOption(id);
+export async function createMeasurementOption(kind: OptionKind, name: string): Promise<ActionResult<MeasurementOption>> {
+  return guard(() => measurementStore.addOption(kind, name));
+}
+
+export async function renameMeasurementOption(id: string, name: string): Promise<ActionResult<MeasurementOption>> {
+  return guard(() => measurementStore.renameOption(id, name));
+}
+
+export async function removeMeasurementOption(id: string): Promise<ActionResult<void>> {
+  return guard(() => measurementStore.removeOption(id));
 }

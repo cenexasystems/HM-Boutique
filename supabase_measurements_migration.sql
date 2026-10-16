@@ -35,9 +35,13 @@ CREATE TABLE IF NOT EXISTS public.measurement_options (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   kind       TEXT NOT NULL CHECK (kind IN ('neck', 'sleeve_type', 'sleeve_length')),
   name       TEXT NOT NULL,
+  sort_order INT NOT NULL DEFAULT 1000,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE (kind, name)
 );
+
+-- For databases that already have the table from an earlier run:
+ALTER TABLE public.measurement_options ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 1000;
 
 -- The earlier one-row-per-item prototype table is no longer used. If you
 -- ran the first version of this migration you can drop it:

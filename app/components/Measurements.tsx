@@ -8,12 +8,15 @@ import { fetchMeasurements, removeMeasurement, updateMeasurementStatus } from "@
 import {
   MEASUREMENT_FIELDS,
   MEASUREMENT_STATUSES,
-  periodStart,
+  periodRange,
+  toYmd,
+  unwrap,
   type MeasurementOrder,
   type MeasurementPeriod,
   type MeasurementStatus,
 } from "@/lib/measurements";
 import { toast } from "@/lib/toast";
+import { buildXlsx, type XlsxCell } from "@/lib/xlsx";
 
 const PERIODS: { id: MeasurementPeriod; label: string }[] = [
   { id: "all", label: "All Time" },
@@ -47,7 +50,6 @@ export default function Measurements({
   const [records, setRecords] = useState<MeasurementOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [period, setPeriod] = useState<MeasurementPeriod>("all");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [searchId, setSearchId] = useState("");
@@ -57,11 +59,22 @@ export default function Measurements({
   const [openId, setOpenId] = useState<string | null>(null);
   const [showOptions, setShowOptions] = useState(false);
 
+  // Period buttons just fill From/To; the highlighted button is whichever range matches the dates.
+  const activePeriod = PERIODS.find((p) => {
+    const r = periodRange(p.id);
+    return r.from === fromDate && r.to === toDate;
+  })?.id;
+  const selectPeriod = (p: MeasurementPeriod) => {
+    const r = periodRange(p);
+    setFromDate(r.from);
+    setToDate(r.to);
+  };
+
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      setRecords(await fetchMeasurements());
+      setRecords(unwrap(await fetchMeasurements()));
     } catch (e) {
       setError((e as Error)?.message || "Failed to load measurements");
     } finally {
@@ -75,9 +88,8 @@ export default function Measurements({
 
   // Everything except the status filter, so the status cards can show counts for the other filters.
   const baseFiltered = useMemo(() => {
-    const customRange = Boolean(fromDate || toDate);
-    const start = customRange ? (fromDate ? new Date(`${fromDate}T00:00:00`) : null) : periodStart(period);
-    const end = customRange && toDate ? new Date(`${toDate}T23:59:59.999`) : null;
+    const start = fromDate ? new Date(`${fromDate}T00:00:00`) : null;
+    const end = toDate ? new Date(`${toDate}T23:59:59.999`) : null;
     const id = searchId.trim().toLowerCase();
     const name = searchName.trim().toLowerCase();
     const phone = searchPhone.trim();
@@ -90,7 +102,7 @@ export default function Measurements({
       if (phone && !r.phone.includes(phone)) return false;
       return true;
     });
-  }, [records, period, fromDate, toDate, searchId, searchName, searchPhone]);
+  }, [records, fromDate, toDate, searchId, searchName, searchPhone]);
 
   const visible = useMemo(
     () => (statusFilter === "ALL" ? baseFiltered : baseFiltered.filter((r) => r.status === statusFilter)),
@@ -107,7 +119,7 @@ export default function Measurements({
     const prev = r.status;
     setRecords((rs) => rs.map((x) => (x.id === r.id ? { ...x, status } : x)));
     try {
-      await updateMeasurementStatus(r.id, status);
+      unwrap(await updateMeasurementStatus(r.id, status));
     } catch (e) {
       setRecords((rs) => rs.map((x) => (x.id === r.id ? { ...x, status: prev } : x)));
       toast.error((e as Error)?.message || "Failed to update status");
@@ -117,7 +129,7 @@ export default function Measurements({
   const handleDelete = async (r: MeasurementOrder) => {
     if (!window.confirm(`Delete the measurements for ${r.invoice_no}?`)) return;
     try {
-      await removeMeasurement(r.id);
+      unwrap(await removeMeasurement(r.id));
       setRecords((rs) => rs.filter((x) => x.id !== r.id));
       toast.success("Measurements deleted");
     } catch (e) {
@@ -125,28 +137,46 @@ export default function Measurements({
     }
   };
 
-  const exportCsv = () => {
-    const esc = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const rows = [["Order ID", "Date", "Customer", "Phone", "Status", "Items & Measurements"]];
+  // One row per billed item, one column per measurement - opens cleanly in Excel.
+  const exportExcel = () => {
+    const headers = [
+      "Order ID", "Bill Type", "Date", "Customer", "Phone", "Status", "Item", "Qty", "Price (₹)", "Due Date",
+      "Front Neck", "Back Neck", "Sleeve Type", "Sleeve Length",
+      ...MEASUREMENT_FIELDS.map((f) => `${f.label} (cm)`),
+      "Remarks",
+    ];
+    const rows: XlsxCell[][] = [];
     visible.forEach((r) => {
-      const detail = r.items
-        .map((it) => {
-          const ms = MEASUREMENT_FIELDS.filter((f) => it.measurements?.[f.key])
-            .map((f) => `${f.label} ${it.measurements[f.key]}`)
-            .join(", ");
-          const pat = [it.front_neck_type && `Front neck: ${it.front_neck_type}`, it.back_neck_type && `Back neck: ${it.back_neck_type}`, it.sleeve_type && `Sleeve: ${it.sleeve_type}`, it.sleeve_length && `Sleeve length: ${it.sleeve_length}`]
-            .filter(Boolean)
-            .join(", ");
-          return `${it.item_name} [${[pat, ms, ...(it.remarks || [])].filter(Boolean).join("; ")}]`;
-        })
-        .join(" | ");
-      rows.push([r.invoice_no, fmtDate(r.created_at), r.customer_name, r.phone, STATUS_STYLE[r.status].label, detail]);
+      r.items.forEach((it) => {
+        rows.push([
+          r.invoice_no,
+          r.order_kind === "ADVANCE" ? "Advance" : "Invoice",
+          fmtDate(r.created_at),
+          r.customer_name,
+          r.phone,
+          STATUS_STYLE[r.status].label,
+          it.item_name,
+          Number(it.qty) || 1,
+          Number(it.price) || 0,
+          it.due_date ? fmtDate(it.due_date) : "",
+          it.front_neck_type,
+          it.back_neck_type,
+          it.sleeve_type,
+          it.sleeve_length,
+          ...MEASUREMENT_FIELDS.map((f) => {
+            const v = parseFloat(it.measurements?.[f.key] ?? "");
+            return Number.isFinite(v) ? v : "";
+          }),
+          (it.remarks || []).map((m, i) => `${i + 1}. ${m}`).join("\n"),
+        ]);
+      });
     });
-    const blob = new Blob(["﻿" + rows.map((row) => row.map(esc).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const widths = [20, 10, 14, 22, 14, 12, 28, 6, 12, 14, 16, 16, 14, 14, ...MEASUREMENT_FIELDS.map(() => 13), 40];
+    const blob = buildXlsx({ sheetName: "Measurements", headers, rows, widths });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `measurements-${new Date().toISOString().split("T")[0]}.csv`;
+    a.download = `measurements-${toYmd(new Date())}.xlsx`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -165,15 +195,11 @@ export default function Measurements({
           <div className="flex flex-wrap items-center gap-1 bg-white border border-black/10 rounded-full px-3 py-1.5 shadow-sm">
             <span className="text-[9px] font-black uppercase tracking-wider text-black/60 mr-1">Period:</span>
             {PERIODS.map((p) => {
-              const active = period === p.id && !fromDate && !toDate;
+              const active = activePeriod === p.id;
               return (
                 <button
                   key={p.id}
-                  onClick={() => {
-                    setPeriod(p.id);
-                    setFromDate("");
-                    setToDate("");
-                  }}
+                  onClick={() => selectPeriod(p.id)}
                   className={`px-3 py-1.5 rounded-full text-[10px] font-black uppercase tracking-wider cursor-pointer transition-colors ${
                     active ? "bg-[#F500A0] text-white" : "text-[#000000] hover:bg-black/5"
                   }`}
@@ -190,11 +216,11 @@ export default function Measurements({
             <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="text-xs font-bold normal-case bg-transparent focus:outline-none" />
           </div>
           <button
-            onClick={exportCsv}
+            onClick={exportExcel}
             disabled={visible.length === 0}
             className="text-xs font-black uppercase tracking-wider border-2 border-[#F500A0] text-[#F500A0] bg-white hover:bg-[#F500A0]/5 disabled:opacity-40 px-5 py-2.5 rounded-full flex items-center gap-2 cursor-pointer"
           >
-            <Download className="w-4 h-4" /> Export CSV
+            <Download className="w-4 h-4" /> Export Excel
           </button>
         </div>
       </div>
