@@ -1,13 +1,7 @@
 // Shared types + constants for the Measurements module (safe for client and server).
 
-export type MeasurementRecord = {
-  id: string;
-  measurement_no: string;
-  customer_name: string;
-  phone: string;
-  address: string;
-  item_name: string;
-  price: number;
+/** What the tailor needs for ONE billed line item (view-only; never printed on receipts). */
+export type ItemMeasurement = {
   due_date: string | null; // YYYY-MM-DD
   front_neck_type: string;
   back_neck_type: string;
@@ -15,10 +9,32 @@ export type MeasurementRecord = {
   sleeve_length: string;
   measurements: Record<string, string>; // key from MEASUREMENT_FIELDS -> cm value
   remarks: string[];
+};
+
+/** An ItemMeasurement plus the bill line it belongs to (snapshotted when the bill is saved). */
+export type MeasurementLine = ItemMeasurement & {
+  item_name: string;
+  price: number;
+  qty: number;
+};
+
+export type MeasurementStatus = 'PENDING' | 'COMPLETED' | 'CANCELLED';
+export const MEASUREMENT_STATUSES: MeasurementStatus[] = ['PENDING', 'COMPLETED', 'CANCELLED'];
+
+/** One saved bill (invoice or advance order) and the measurements of its line items. */
+export type MeasurementOrder = {
+  id: string;
+  invoice_no: string;
+  order_kind: 'INVOICE' | 'ADVANCE';
+  customer_name: string;
+  phone: string;
+  address: string;
+  status: MeasurementStatus;
+  items: MeasurementLine[];
   created_at: string;
 };
 
-export type MeasurementInput = Omit<MeasurementRecord, 'id' | 'measurement_no' | 'created_at'>;
+export type MeasurementOrderInput = Omit<MeasurementOrder, 'id' | 'status' | 'created_at'>;
 
 export const MEASUREMENT_FIELDS: { key: string; label: string }[] = [
   { key: 'front_neck', label: 'Front Neck' },
@@ -62,7 +78,7 @@ export const OPTION_KINDS: { kind: OptionKind; title: string; builtIn: readonly 
   { kind: 'sleeve_length', title: 'Sleeve Lengths', builtIn: SLEEVE_LENGTHS },
 ];
 
-export type MeasurementPeriod = 'today' | 'week' | 'month' | 'all';
+export type MeasurementPeriod = 'all' | 'today' | 'week' | 'month' | 'year';
 
 /** Start of the period in local time (week starts Monday). `null` = no lower bound. */
 export function periodStart(period: MeasurementPeriod, now = new Date()): Date | null {
@@ -74,16 +90,12 @@ export function periodStart(period: MeasurementPeriod, now = new Date()): Date |
     return d;
   }
   if (period === 'month') return new Date(now.getFullYear(), now.getMonth(), 1);
+  if (period === 'year') return new Date(now.getFullYear(), 0, 1);
   return null;
 }
 
-export function emptyMeasurement(seed?: Partial<MeasurementInput>): MeasurementInput {
+export function emptyItemMeasurement(): ItemMeasurement {
   return {
-    customer_name: '',
-    phone: '',
-    address: '',
-    item_name: '',
-    price: 0,
     due_date: null,
     front_neck_type: '',
     back_neck_type: '',
@@ -91,6 +103,18 @@ export function emptyMeasurement(seed?: Partial<MeasurementInput>): MeasurementI
     sleeve_length: '',
     measurements: {},
     remarks: [],
-    ...seed,
   };
+}
+
+/** True when the tailor entered anything worth saving. */
+export function hasMeasurementData(m: ItemMeasurement): boolean {
+  return Boolean(
+    m.front_neck_type ||
+      m.back_neck_type ||
+      m.sleeve_type ||
+      m.sleeve_length ||
+      m.due_date ||
+      m.remarks.some((r) => r.trim()) ||
+      Object.values(m.measurements).some((v) => String(v).trim()),
+  );
 }

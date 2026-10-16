@@ -1,27 +1,29 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { X, Plus, Trash2, Ruler, Loader2, Pencil, ChevronLeft } from "lucide-react";
+import { X, Plus, Trash2, Ruler, Pencil } from "lucide-react";
 import NeckTypeIcon from "./NeckTypeIcon";
 import {
   MEASUREMENT_FIELDS,
   NECK_TYPES,
   SLEEVE_TYPES,
   SLEEVE_LENGTHS,
-  type MeasurementInput,
+  type ItemMeasurement,
   type MeasurementOption,
-  type MeasurementRecord,
 } from "@/lib/measurements";
-import { createMeasurement, editMeasurement, fetchMeasurementOptions } from "@/app/pos/actions";
-import { toast } from "@/lib/toast";
+import { fetchMeasurementOptions } from "@/app/pos/actions";
 
 type Props = {
-  /** Pre-filled values (from the billing row) or the record being edited. */
-  initial: MeasurementInput;
-  /** When set, the modal edits this record instead of creating a new one. */
-  editingId?: string | null;
+  /** Billing line this measurement belongs to (shown in the header). */
+  itemName: string;
+  /** Existing draft for this line, or an empty one. */
+  initial: ItemMeasurement;
+  /** True when `initial` was already saved before - skips the neck picker and shows "Remove". */
+  hasDraft: boolean;
   onClose: () => void;
-  onSaved: (rec: MeasurementRecord) => void;
+  /** Keeps the measurement on the billing line (nothing is written to the database yet). */
+  onSave: (m: ItemMeasurement) => void;
+  onRemove: () => void;
 };
 
 type Step = "neck" | "form";
@@ -30,12 +32,13 @@ const label = "block text-[10px] font-black uppercase tracking-wider text-[#0000
 const input =
   "w-full bg-white border border-black/10 focus:border-[#F500A0] rounded-lg px-3 py-2 text-xs font-semibold text-[#000000] focus:outline-none transition-colors";
 
-export default function MeasurementModal({ initial, editingId, onClose, onSaved }: Props) {
-  const [data, setData] = useState<MeasurementInput>(initial);
-  const [step, setStep] = useState<Step>(editingId ? "form" : "neck");
+export default function MeasurementModal({ itemName, initial, hasDraft, onClose, onSave, onRemove }: Props) {
+  const [data, setData] = useState<ItemMeasurement>(initial);
+  const [step, setStep] = useState<Step>(hasDraft ? "form" : "neck");
   const [neckTarget, setNeckTarget] = useState<"front" | "back">("front");
   const [customNeck, setCustomNeck] = useState("");
-  const [saving, setSaving] = useState(false);
+  // True only for the very first neck screen of a new measurement (Cancel closes; later it's Back).
+  const [firstPick, setFirstPick] = useState(!hasDraft);
   const [extraOptions, setExtraOptions] = useState<MeasurementOption[]>([]);
 
   // Options added from the Measurements tab (best-effort: built-ins still work if this fails)
@@ -50,11 +53,8 @@ export default function MeasurementModal({ initial, editingId, onClose, onSaved 
   const necks = useMemo(() => withExtras("neck", NECK_TYPES), [extraOptions]); // eslint-disable-line react-hooks/exhaustive-deps
   const sleeveTypes = useMemo(() => withExtras("sleeve_type", SLEEVE_TYPES), [extraOptions]); // eslint-disable-line react-hooks/exhaustive-deps
   const sleeveLengths = useMemo(() => withExtras("sleeve_length", SLEEVE_LENGTHS), [extraOptions]); // eslint-disable-line react-hooks/exhaustive-deps
-  // True only for the very first neck screen of a new measurement (Cancel closes; later it's Back).
-  const [firstPick, setFirstPick] = useState(!editingId);
 
-  const set = <K extends keyof MeasurementInput>(k: K, v: MeasurementInput[K]) =>
-    setData((d) => ({ ...d, [k]: v }));
+  const set = <K extends keyof ItemMeasurement>(k: K, v: ItemMeasurement[K]) => setData((d) => ({ ...d, [k]: v }));
 
   const neckKey = neckTarget === "front" ? "front_neck_type" : "back_neck_type";
   const selectedNeck = data[neckKey];
@@ -63,23 +63,6 @@ export default function MeasurementModal({ initial, editingId, onClose, onSaved 
     setNeckTarget(target);
     setCustomNeck("");
     setStep("neck");
-  };
-
-  const handleSave = async () => {
-    if (!data.customer_name.trim() && !data.phone.trim()) {
-      toast.error("Enter a customer name or mobile number");
-      return;
-    }
-    setSaving(true);
-    try {
-      const rec = editingId ? await editMeasurement(editingId, data) : await createMeasurement(data);
-      toast.success(editingId ? "Measurement updated" : "Measurement saved");
-      onSaved(rec);
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : "Failed to save measurement");
-    } finally {
-      setSaving(false);
-    }
   };
 
   const goForm = () => {
@@ -96,9 +79,12 @@ export default function MeasurementModal({ initial, editingId, onClose, onSaved 
         {step === "neck" ? (
           <>
             <div className="px-5 pt-5 pb-3 flex items-center justify-between">
-              <h3 className="text-base font-black text-[#000000]">
-                Select {neckTarget === "front" ? "Front" : "Back"} Neck Type
-              </h3>
+              <div>
+                <h3 className="text-base font-black text-[#000000]">
+                  Select {neckTarget === "front" ? "Front" : "Back"} Neck Type
+                </h3>
+                {itemName && <p className="text-[11px] font-semibold text-black/60 mt-0.5">{itemName}</p>}
+              </div>
               <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-black/5 cursor-pointer" aria-label="Close">
                 <X className="w-4 h-4" />
               </button>
@@ -154,62 +140,18 @@ export default function MeasurementModal({ initial, editingId, onClose, onSaved 
         ) : (
           <>
             <div className="px-5 pt-5 pb-3 flex items-center justify-between border-b border-black/10">
-              <h3 className="text-base font-black text-[#000000] flex items-center gap-2">
-                <Ruler className="w-4 h-4 text-[#F500A0]" />
-                {editingId ? "Edit Measurement" : "Create Order"}
-              </h3>
+              <div className="min-w-0">
+                <h3 className="text-base font-black text-[#000000] flex items-center gap-2">
+                  <Ruler className="w-4 h-4 text-[#F500A0]" /> Measurements
+                </h3>
+                {itemName && <p className="text-[11px] font-semibold text-black/60 mt-0.5 truncate">{itemName}</p>}
+              </div>
               <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-black/5 cursor-pointer" aria-label="Close">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
-              {/* Customer */}
-              <section className="space-y-3">
-                <h4 className="text-[11px] font-black uppercase tracking-[0.15em] text-[#F500A0]">Customer Details</h4>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={label}>Customer Name</label>
-                    <input className={input} value={data.customer_name} onChange={(e) => set("customer_name", e.target.value)} placeholder="Customer name" />
-                  </div>
-                  <div>
-                    <label className={label}>Mobile Number</label>
-                    <input className={input} inputMode="tel" value={data.phone} onChange={(e) => set("phone", e.target.value)} placeholder="10-digit number" />
-                  </div>
-                </div>
-                <div>
-                  <label className={label}>Address (optional)</label>
-                  <input className={input} value={data.address} onChange={(e) => set("address", e.target.value)} placeholder="Full address" />
-                </div>
-              </section>
-
-              {/* Garment */}
-              <section className="space-y-3">
-                <h4 className="text-[11px] font-black uppercase tracking-[0.15em] text-[#F500A0]">Garment</h4>
-                <div>
-                  <label className={label}>Item / Style</label>
-                  <input className={input} value={data.item_name} onChange={(e) => set("item_name", e.target.value)} placeholder="e.g. Princess-cut Blouse" />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={label}>Price (₹)</label>
-                    <input
-                      className={input}
-                      type="number"
-                      min={0}
-                      value={data.price || ""}
-                      onChange={(e) => set("price", parseFloat(e.target.value) || 0)}
-                      onWheel={(e) => e.currentTarget.blur()}
-                      placeholder="0"
-                    />
-                  </div>
-                  <div>
-                    <label className={label}>Due Date</label>
-                    <input className={input} type="date" value={data.due_date || ""} onChange={(e) => set("due_date", e.target.value || null)} />
-                  </div>
-                </div>
-              </section>
-
               {/* Patterns */}
               <section className="space-y-3">
                 <h4 className="text-[11px] font-black uppercase tracking-[0.15em] text-[#F500A0]">Patterns</h4>
@@ -233,6 +175,10 @@ export default function MeasurementModal({ initial, editingId, onClose, onSaved 
                 })}
                 <Chips title="Sleeve Type" options={sleeveTypes} value={data.sleeve_type} onChange={(v) => set("sleeve_type", v)} />
                 <Chips title="Sleeve Length" options={sleeveLengths} value={data.sleeve_length} onChange={(v) => set("sleeve_length", v)} />
+                <div>
+                  <label className={label}>Due Date (optional)</label>
+                  <input className={input} type="date" value={data.due_date || ""} onChange={(e) => set("due_date", e.target.value || null)} />
+                </div>
               </section>
 
               {/* Measurements */}
@@ -295,22 +241,19 @@ export default function MeasurementModal({ initial, editingId, onClose, onSaved 
             </div>
 
             <div className="px-5 py-4 border-t border-black/10 flex items-center gap-3">
-              {!editingId && (
+              {hasDraft && (
                 <button
-                  onClick={() => openNeckPicker("front")}
-                  className="p-2.5 rounded-xl border border-black/10 hover:bg-black/5 cursor-pointer"
-                  aria-label="Back to neck types"
+                  onClick={onRemove}
+                  className="text-xs font-bold text-red-600 px-3 py-2.5 rounded-xl border border-red-200 hover:bg-red-50 cursor-pointer"
                 >
-                  <ChevronLeft className="w-4 h-4" />
+                  Remove
                 </button>
               )}
               <button
-                onClick={handleSave}
-                disabled={saving}
-                className="flex-1 bg-[#F500A0] hover:brightness-95 disabled:opacity-60 text-white text-xs font-black uppercase tracking-wider px-4 py-3 rounded-xl flex items-center justify-center gap-2 cursor-pointer"
+                onClick={() => onSave({ ...data, remarks: data.remarks.map((r) => r.trim()).filter(Boolean) })}
+                className="flex-1 bg-[#F500A0] hover:brightness-95 text-white text-xs font-black uppercase tracking-wider px-4 py-3 rounded-xl cursor-pointer"
               >
-                {saving && <Loader2 className="w-4 h-4 animate-spin" />}
-                {editingId ? "Update Measurement" : "Save Measurement"}
+                Save Measurements
               </button>
             </div>
           </>

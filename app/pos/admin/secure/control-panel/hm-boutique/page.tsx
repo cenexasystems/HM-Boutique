@@ -92,13 +92,13 @@ import Coupons from "@/app/components/Coupons";
 import OutstandingCredits from "@/app/components/OutstandingCredits";
 import Measurements from "@/app/components/Measurements";
 import MeasurementModal from "@/app/components/MeasurementModal";
-import { emptyMeasurement, type MeasurementInput } from "@/lib/measurements";
+import { emptyItemMeasurement, hasMeasurementData, type ItemMeasurement, type MeasurementLine } from "@/lib/measurements";
 import LowStockAlarmModal from "@/app/components/LowStockAlarmModal";
 import OverdueTaskAlarmModal from "@/app/components/OverdueTaskAlarmModal";
 import StockAdjustmentModal from "@/app/components/StockAdjustmentModal";
 import InvoiceModal from "@/app/components/InvoiceModal";
 import PrintSettingsModal from "@/app/components/PrintSettingsModal";
-import { checkCoupon, adjustProductStock, seedCatalog } from "@/app/pos/actions";
+import { checkCoupon, adjustProductStock, seedCatalog, createMeasurementOrder } from "@/app/pos/actions";
 import { BRAND_EN, BRAND_ADDRESS, BRAND_PHONE_DISPLAY, BRAND_LOGO, DEFAULT_SHOP_PROFILE } from "@/lib/brand";
 import { calculateTaxAndTotals, formatINR } from "@/lib/money";
 import { getOrderTotals, calculateOrderTotals, calculateBillTotals } from "@/lib/orderTotals";
@@ -436,9 +436,9 @@ export default function POSBilling() {
     "billing" | "orders" | "analytics" | "inventory" | "expenses" | "advance" | "attendance" | "work_allocation" | "coupons" | "outstanding_credits" | "store_settings" | "measurements"
   >("billing");
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
-  // Measurements: modal opened from a billing row, ids of rows that already have a saved measurement
-  const [measureTarget, setMeasureTarget] = useState<{ itemId: string; initial: MeasurementInput } | null>(null);
-  const [measuredItemIds, setMeasuredItemIds] = useState<Set<string>>(new Set());
+  // Measurements are drafted per billing line and only saved (with the bill) when the sale / advance order completes.
+  const [measureItemId, setMeasureItemId] = useState<string | null>(null);
+  const [itemMeasurements, setItemMeasurements] = useState<Record<string, ItemMeasurement>>({});
   const [measurementsRefresh, setMeasurementsRefresh] = useState(0);
   const [adjustProduct, setAdjustProduct] = useState<CatalogItem | null>(null);
   const [couponCodeInput, setCouponCodeInput] = useState<string>("");
@@ -1019,6 +1019,36 @@ export default function POSBilling() {
 
   const removeItem = (id: string) => {
     setItems(items.filter((item) => item.id !== id));
+    setItemMeasurements(({ [id]: _dropped, ...rest }) => rest);
+  };
+
+  // Saves the drafted measurements of the billed lines against the bill. Never blocks or fails the bill itself.
+  const saveBillMeasurements = async (
+    invoiceNo: string,
+    kind: "INVOICE" | "ADVANCE",
+    billedItems: OrderItem[],
+  ) => {
+    const lines: MeasurementLine[] = billedItems.flatMap((it) => {
+      const m = itemMeasurements[it.id];
+      return m && hasMeasurementData(m)
+        ? [{ ...m, item_name: it.name, price: Number(it.price) || 0, qty: Number(it.qty) || 1 }]
+        : [];
+    });
+    if (lines.length === 0) return;
+    try {
+      await createMeasurementOrder({
+        invoice_no: invoiceNo,
+        order_kind: kind,
+        customer_name: customerName.trim() || "Guest",
+        phone: customerPhone,
+        address: customerAddress.trim(),
+        items: lines,
+      });
+      setMeasurementsRefresh((n) => n + 1);
+    } catch (e) {
+      console.error("Saving measurements failed:", e);
+      toast.error(`Bill saved, but its measurements could not be saved: ${(e as Error)?.message || "unknown error"}`);
+    }
   };
 
   const updateItem = (id: string, field: keyof OrderItem, value: any) => {
@@ -1038,6 +1068,7 @@ export default function POSBilling() {
   };
 
   const clearOrder = () => {
+    setItemMeasurements({});
     setItems([
       { id: Math.random().toString(), name: "", desc: "", price: 0, qty: 1 },
     ]);
@@ -1416,6 +1447,8 @@ export default function POSBilling() {
         })),
       });
 
+      await saveBillMeasurements(advId, "ADVANCE", items);
+
       // Capture receipt details before clearing the form.
       const receiptCustomerName = customerName || "Guest";
       const receiptCustomerPhone = customerPhone;
@@ -1434,6 +1467,7 @@ export default function POSBilling() {
       const receiptGstAmount = applyGST ? Number(gstAmount) || 0 : 0;
 
       // Reset billing form.
+      setItemMeasurements({});
       setItems([{ id: "1", name: "", desc: "", price: 0, qty: 1 }]);
       setCustomerName("");
       setCustomerPhone("");
@@ -1787,6 +1821,8 @@ export default function POSBilling() {
         creditDueDate: paymentMode === "CREDIT" ? (creditDueDate || null) : null,
       });
 
+      await saveBillMeasurements(newOrderId, "INVOICE", itemsToSave);
+
       // Construct mappedOrder directly in memory to respond with ZERO blocking delay
       const mappedOrder: any = normalizeOrder({
         id: dbUuid || newOrderId,
@@ -1861,6 +1897,7 @@ export default function POSBilling() {
       setCustomerAddress("");
       setCreditDueDate("");
       setCustomOrderDate(new Date().toISOString().split("T")[0]);
+      setItemMeasurements({});
       setItems([{ id: "1", name: "", desc: "", price: 0, qty: 1 }]);
       setDiscountValue(0);
       setDeliveryFee(0);
@@ -4336,27 +4373,16 @@ export default function POSBilling() {
                               {/* Trash Button */}
                               <div className="flex justify-end gap-1.5 shrink-0">
                                 <button
-                                  onClick={() =>
-                                    setMeasureTarget({
-                                      itemId: item.id,
-                                      initial: emptyMeasurement({
-                                        customer_name: customerName,
-                                        phone: customerPhone,
-                                        address: customerAddress,
-                                        item_name: item.name,
-                                        price: item.price,
-                                      }),
-                                    })
-                                  }
+                                  onClick={() => setMeasureItemId(item.id)}
                                   className={`relative p-2 rounded-lg border transition-colors flex items-center justify-center cursor-pointer ${
-                                    measuredItemIds.has(item.id)
+                                    Boolean(itemMeasurements[item.id])
                                       ? "text-[#F500A0] border-[#F500A0]/40 bg-[#F500A0]/5"
                                       : "text-[#000000] border-black/10 hover:text-[#F500A0] hover:border-[#F500A0]/40"
                                   }`}
-                                  title={measuredItemIds.has(item.id) ? "Measurement saved - add another" : "Add Measurements"}
+                                  title={Boolean(itemMeasurements[item.id]) ? "Measurements added - click to edit" : "Add Measurements"}
                                 >
                                   <Ruler className="w-4 h-4" />
-                                  {measuredItemIds.has(item.id) && (
+                                  {Boolean(itemMeasurements[item.id]) && (
                                     <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-[#F500A0] text-white flex items-center justify-center">
                                       <Check className="w-2.5 h-2.5" />
                                     </span>
@@ -8442,14 +8468,21 @@ export default function POSBilling() {
           </div>
         )}
 
-        {measureTarget && (
+        {measureItemId && (
           <MeasurementModal
-            initial={measureTarget.initial}
-            onClose={() => setMeasureTarget(null)}
-            onSaved={() => {
-              setMeasuredItemIds((prev) => new Set(prev).add(measureTarget.itemId));
-              setMeasurementsRefresh((n) => n + 1);
-              setMeasureTarget(null);
+            itemName={items.find((i) => i.id === measureItemId)?.name || ""}
+            initial={itemMeasurements[measureItemId] ?? emptyItemMeasurement()}
+            hasDraft={Boolean(itemMeasurements[measureItemId])}
+            onClose={() => setMeasureItemId(null)}
+            onSave={(m) => {
+              const id = measureItemId;
+              setItemMeasurements((prev) => ({ ...prev, [id]: m }));
+              setMeasureItemId(null);
+            }}
+            onRemove={() => {
+              const id = measureItemId;
+              setItemMeasurements(({ [id]: _dropped, ...rest }) => rest);
+              setMeasureItemId(null);
             }}
           />
         )}
