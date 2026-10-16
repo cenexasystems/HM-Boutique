@@ -57,6 +57,7 @@ import {
   ClipboardList,
   MessageSquare,
   CreditCard,
+  Ruler,
 } from "lucide-react";
 import {
   verifyPasscode,
@@ -89,6 +90,9 @@ import Attendance from "@/app/components/Attendance";
 import WorkAllocation from "@/app/components/WorkAllocation";
 import Coupons from "@/app/components/Coupons";
 import OutstandingCredits from "@/app/components/OutstandingCredits";
+import Measurements from "@/app/components/Measurements";
+import MeasurementModal from "@/app/components/MeasurementModal";
+import { emptyMeasurement, type MeasurementInput } from "@/lib/measurements";
 import LowStockAlarmModal from "@/app/components/LowStockAlarmModal";
 import OverdueTaskAlarmModal from "@/app/components/OverdueTaskAlarmModal";
 import StockAdjustmentModal from "@/app/components/StockAdjustmentModal";
@@ -429,9 +433,13 @@ export default function POSBilling() {
 
   const [activeCategory, setActiveCategory] = useState<string>("ALL");
   const [activeTab, setActiveTab] = useState<
-    "billing" | "orders" | "analytics" | "inventory" | "expenses" | "advance" | "attendance" | "work_allocation" | "coupons" | "outstanding_credits" | "store_settings"
+    "billing" | "orders" | "analytics" | "inventory" | "expenses" | "advance" | "attendance" | "work_allocation" | "coupons" | "outstanding_credits" | "store_settings" | "measurements"
   >("billing");
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(false);
+  // Measurements: modal opened from a billing row, ids of rows that already have a saved measurement
+  const [measureTarget, setMeasureTarget] = useState<{ itemId: string; initial: MeasurementInput } | null>(null);
+  const [measuredItemIds, setMeasuredItemIds] = useState<Set<string>>(new Set());
+  const [measurementsRefresh, setMeasurementsRefresh] = useState(0);
   const [adjustProduct, setAdjustProduct] = useState<CatalogItem | null>(null);
   const [couponCodeInput, setCouponCodeInput] = useState<string>("");
   const [appliedCoupon, setAppliedCoupon] = useState<{ code: string; percentage: number; discountAmount: number } | null>(null);
@@ -3419,6 +3427,22 @@ export default function POSBilling() {
               <History className="w-5 h-5 shrink-0" />
               Order History
             </button>
+            <button
+              onClick={() => {
+                setActiveTab("measurements");
+                setCompletedBillData(null);
+                if (mainScrollRef.current) mainScrollRef.current.scrollTop = 0;
+                window.scrollTo({ top: 0, behavior: "instant" });
+              }}
+              className={`w-full flex items-center gap-3.5 px-3.5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-colors cursor-pointer ${
+                activeTab === "measurements"
+                  ? "bg-white text-[#27272A] shadow-md"
+                  : "text-white/90 hover:bg-white/20 hover:text-white"
+              }`}
+            >
+              <Ruler className="w-5 h-5 shrink-0" />
+              Measurements
+            </button>
             {role === "admin" && (
               <button
                 onClick={() => {
@@ -4047,12 +4071,14 @@ export default function POSBilling() {
                     <div className="flex-1 px-4 sm:px-6 pb-4 sm:pb-6 overflow-visible">
                       {/* Table Header */}
                       <div className="hidden sm:grid grid-cols-12 gap-4 pb-3 border-b border-black/10 text-[9px] font-black text-[#000000] uppercase tracking-[0.15em] mt-4 mb-2">
-                        <div className="col-span-7 pl-2">
+                        <div className="col-span-6 pl-2">
                           Item Name / Description
                         </div>
-                        <div className="col-span-2 text-center">Price (₹)</div>
-                        <div className="col-span-2 text-center">Qty</div>
-                        <div className="col-span-1"></div>
+                        <div className="col-span-6 grid grid-cols-[minmax(0,1fr)_90px_80px] gap-4">
+                          <div className="text-center">Price (₹)</div>
+                          <div className="text-center">Qty</div>
+                          <div></div>
+                        </div>
                       </div>
 
                       {/* Items List */}
@@ -4063,7 +4089,7 @@ export default function POSBilling() {
                             className="flex flex-col sm:grid sm:grid-cols-12 gap-3 sm:gap-4 items-stretch sm:items-center group border-b border-transparent pb-4 pt-1 overflow-visible relative"
                           >
                             {/* Item Name / Description Input + Catalog Button */}
-                            <div className="col-span-7 relative flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full">
+                            <div className="col-span-6 relative flex flex-col sm:flex-row items-stretch sm:items-center gap-2 w-full">
                               <input
                                 type="text"
                                 placeholder="Type custom item name..."
@@ -4257,9 +4283,9 @@ export default function POSBilling() {
                             </div>
 
                             {/* Price, Qty, and Trash (Grid on mobile to prevent overflow, grid on desktop) */}
-                            <div className="col-span-5 grid grid-cols-[minmax(0,1fr)_auto_auto] sm:grid-cols-5 gap-2 sm:gap-4 w-full items-center">
+                            <div className="col-span-6 grid grid-cols-[minmax(0,1fr)_auto_auto] sm:grid-cols-[minmax(0,1fr)_90px_80px] gap-2 sm:gap-4 w-full items-center">
                               {/* Price Input */}
-                              <div className="sm:col-span-2 flex items-center gap-1.5 sm:gap-2 sm:block min-w-0 w-full">
+                              <div className="flex items-center gap-1.5 sm:gap-2 sm:block min-w-0 w-full">
                                 <span className="text-[10px] font-bold text-[#000000] uppercase sm:hidden shrink-0">
                                   Price:
                                 </span>
@@ -4280,7 +4306,7 @@ export default function POSBilling() {
                               </div>
 
                               {/* Quantity Counter */}
-                              <div className="sm:col-span-2 flex items-center justify-end gap-1.5 sm:gap-2 sm:block shrink-0">
+                              <div className="flex items-center justify-end gap-1.5 sm:gap-2 sm:block shrink-0">
                                 <span className="text-[10px] font-bold text-[#000000] uppercase sm:hidden shrink-0">
                                   Qty:
                                 </span>
@@ -4308,7 +4334,34 @@ export default function POSBilling() {
                               </div>
 
                               {/* Trash Button */}
-                              <div className="sm:col-span-1 flex justify-end shrink-0">
+                              <div className="flex justify-end gap-1.5 shrink-0">
+                                <button
+                                  onClick={() =>
+                                    setMeasureTarget({
+                                      itemId: item.id,
+                                      initial: emptyMeasurement({
+                                        customer_name: customerName,
+                                        phone: customerPhone,
+                                        address: customerAddress,
+                                        item_name: item.name,
+                                        price: item.price,
+                                      }),
+                                    })
+                                  }
+                                  className={`relative p-2 rounded-lg border transition-colors flex items-center justify-center cursor-pointer ${
+                                    measuredItemIds.has(item.id)
+                                      ? "text-[#F500A0] border-[#F500A0]/40 bg-[#F500A0]/5"
+                                      : "text-[#000000] border-black/10 hover:text-[#F500A0] hover:border-[#F500A0]/40"
+                                  }`}
+                                  title={measuredItemIds.has(item.id) ? "Measurement saved - add another" : "Add Measurements"}
+                                >
+                                  <Ruler className="w-4 h-4" />
+                                  {measuredItemIds.has(item.id) && (
+                                    <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-[#F500A0] text-white flex items-center justify-center">
+                                      <Check className="w-2.5 h-2.5" />
+                                    </span>
+                                  )}
+                                </button>
                                 <button
                                   onClick={() => removeItem(item.id)}
                                   className="text-[#000000] hover:text-[#27272A] hover:bg-[#F4F4F5] p-2 rounded-lg border border-black/10 hover:border-transparent transition-colors flex items-center justify-center cursor-pointer"
@@ -8380,6 +8433,25 @@ export default function POSBilling() {
           <div className="max-w-7xl mx-auto w-full pb-8">
             <Coupons />
           </div>
+        )}
+
+        {/* MEASUREMENTS TAB */}
+        {activeTab === "measurements" && (
+          <div className="max-w-7xl mx-auto w-full pb-8">
+            <Measurements canDelete={role === "admin"} refreshKey={measurementsRefresh} />
+          </div>
+        )}
+
+        {measureTarget && (
+          <MeasurementModal
+            initial={measureTarget.initial}
+            onClose={() => setMeasureTarget(null)}
+            onSaved={() => {
+              setMeasuredItemIds((prev) => new Set(prev).add(measureTarget.itemId));
+              setMeasurementsRefresh((n) => n + 1);
+              setMeasureTarget(null);
+            }}
+          />
         )}
 
         {/* OUTSTANDING CREDITS TAB */}

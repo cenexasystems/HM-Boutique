@@ -3,6 +3,8 @@
 import { dbStore } from "@/lib/dbStore";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 import { validateCoupon } from "@/lib/services/couponService";
+import { measurementStore } from "@/lib/measurementStore";
+import type { MeasurementInput, MeasurementOption, MeasurementRecord, OptionKind } from "@/lib/measurements";
 import { Product, OrderWithRelations, CartItem, Expense, PaymentMode, Category, AdvanceOrderWithRelations, AdvanceOrderStatus } from "@/lib/types";
 
 // Helper to serialize Date objects from Postgres to strings
@@ -371,4 +373,33 @@ export async function saveStoreSettings(settings: {
   } catch (err: any) {
     return { success: false, error: err?.message || 'Failed to save settings' };
   }
+}
+
+// Measurements
+export async function fetchMeasurements(): Promise<MeasurementRecord[]> {
+  return serialize(await measurementStore.list());
+}
+
+export async function createMeasurement(input: MeasurementInput): Promise<MeasurementRecord> {
+  return serialize(await measurementStore.create(input));
+}
+
+export async function editMeasurement(id: string, input: MeasurementInput): Promise<MeasurementRecord> {
+  return serialize(await measurementStore.update(id, input));
+}
+
+export async function removeMeasurement(id: string): Promise<void> {
+  return await measurementStore.remove(id);
+}
+
+export async function fetchMeasurementOptions(): Promise<MeasurementOption[]> {
+  return serialize(await measurementStore.listOptions());
+}
+
+export async function createMeasurementOption(kind: OptionKind, name: string): Promise<MeasurementOption> {
+  return serialize(await measurementStore.addOption(kind, name));
+}
+
+export async function removeMeasurementOption(id: string): Promise<void> {
+  return await measurementStore.removeOption(id);
 }
