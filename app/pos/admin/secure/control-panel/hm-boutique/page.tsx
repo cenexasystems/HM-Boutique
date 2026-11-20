@@ -490,7 +490,7 @@ export default function POSBilling() {
   const [splitGpay, setSplitGpay] = useState<number>(0);
   const [applyGST, setApplyGST] = useState<boolean>(false);
   const [gstPercentage, setGstPercentage] = useState<number>(18);
-  const [taxMode, setTaxMode] = useState<"exclusive" | "inclusive">("exclusive");
+  const [taxMode, setTaxMode] = useState<"exclusive" | "inclusive">("inclusive");
   const [activeInvoiceId, setActiveInvoiceId] = useState<string | null>(null);
   const [activeInvoiceData, setActiveInvoiceData] = useState<CompletedOrder | any | null>(null);
   const [completedBillData, setCompletedBillData] =

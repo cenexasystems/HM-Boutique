@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Ruler, Search, Trash2, ChevronDown, Loader2, Phone, Calendar, Download, Settings2, RefreshCw } from "lucide-react";
+import { Ruler, Search, Trash2, ChevronDown, Loader2, Phone, Calendar, Download, Settings2, RefreshCw, Printer } from "lucide-react";
 import OptionsManager from "./MeasurementOptionsManager";
 import NeckTypeIcon from "./NeckTypeIcon";
 import { fetchMeasurements, removeMeasurement, updateMeasurementStatus } from "@/app/pos/actions";
@@ -181,6 +181,50 @@ export default function Measurements({
     URL.revokeObjectURL(url);
   };
 
+  // Prints the given bills in a clean, tailor-friendly layout via a popup window.
+  const printRecords = (list: MeasurementOrder[]) => {
+    if (list.length === 0) return;
+    const esc = (s: unknown) =>
+      String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+    const body = list
+      .map((r) => {
+        const items = r.items
+          .map((it, idx) => {
+            const filled = MEASUREMENT_FIELDS.filter((f) => it.measurements?.[f.key]);
+            return `<div class="item">
+              <div class="row"><b>${esc(it.item_name || `Item ${idx + 1}`)}</b><span>${it.qty > 1 ? `${esc(it.qty)} × ` : ""}₹${Number(it.price || 0).toLocaleString("en-IN")}${it.due_date ? ` · Due ${esc(fmtDate(it.due_date))}` : ""}</span></div>
+              <div class="meta">Front Neck: <b>${esc(it.front_neck_type || "-")}</b> · Back Neck: <b>${esc(it.back_neck_type || "-")}</b> · Sleeve: <b>${esc(it.sleeve_type || "-")}</b> · Sleeve Length: <b>${esc(it.sleeve_length || "-")}</b></div>
+              ${filled.length ? `<table><tr>${filled.map((f) => `<th>${esc(f.label)}</th>`).join("")}</tr><tr>${filled.map((f) => `<td>${esc(it.measurements[f.key])} cm</td>`).join("")}</tr></table>` : ""}
+              ${it.remarks?.length ? `<ol class="rem">${it.remarks.map((m) => `<li>${esc(m)}</li>`).join("")}</ol>` : ""}
+            </div>`;
+          })
+          .join("");
+        return `<section>
+          <h2>${esc(r.customer_name || "Guest")} <small>${esc(r.invoice_no)}</small></h2>
+          <div class="meta">${r.phone ? `Phone: ${esc(r.phone)} · ` : ""}Date: ${esc(fmtDate(r.created_at))} · Status: ${esc(STATUS_STYLE[r.status].label)}${r.address ? ` · Address: ${esc(r.address)}` : ""}</div>
+          ${items}
+        </section>`;
+      })
+      .join("");
+    const w = window.open("", "_blank", "width=900,height=700");
+    if (!w) {
+      toast.error("Allow pop-ups to print");
+      return;
+    }
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Measurements</title><style>
+      body{font-family:Arial,sans-serif;color:#000;margin:16px;font-size:12px}
+      section{page-break-after:always;margin-bottom:24px}section:last-child{page-break-after:auto}
+      h2{margin:0 0 4px;font-size:18px}h2 small{font-size:12px;color:#F500A0;margin-left:8px}
+      .meta{color:#444;margin:4px 0 8px}.item{border:1px solid #ccc;border-radius:6px;padding:10px;margin:8px 0;break-inside:avoid}
+      .row{display:flex;justify-content:space-between;font-size:13px}
+      table{border-collapse:collapse;margin-top:6px;width:100%}th,td{border:1px solid #bbb;padding:4px 6px;text-align:center;font-size:11px}th{background:#f5f5f5}
+      .rem{margin:6px 0 0 18px;padding:0}
+    </style></head><body>${body}</body></html>`);
+    w.document.close();
+    w.focus();
+    setTimeout(() => w.print(), 250);
+  };
+
   return (
     <div className="space-y-5">
       {/* Header: title, period, date range, actions */}
@@ -221,6 +265,13 @@ export default function Measurements({
             className="text-xs font-black uppercase tracking-wider border-2 border-[#F500A0] text-[#F500A0] bg-white hover:bg-[#F500A0]/5 disabled:opacity-40 px-5 py-2.5 rounded-full flex items-center gap-2 cursor-pointer"
           >
             <Download className="w-4 h-4" /> Export Excel
+          </button>
+          <button
+            onClick={() => printRecords(visible)}
+            disabled={visible.length === 0}
+            className="text-xs font-black uppercase tracking-wider border-2 border-[#F500A0] text-[#F500A0] bg-white hover:bg-[#F500A0]/5 disabled:opacity-40 px-5 py-2.5 rounded-full flex items-center gap-2 cursor-pointer"
+          >
+            <Printer className="w-4 h-4" /> Print
           </button>
         </div>
       </div>
@@ -353,6 +404,9 @@ export default function Measurements({
                       </option>
                     ))}
                   </select>
+                  <button onClick={() => printRecords([r])} className="p-2 rounded-lg border border-black/10 hover:bg-black/5 cursor-pointer" aria-label="Print">
+                    <Printer className="w-4 h-4" />
+                  </button>
                   {canDelete && (
                     <button onClick={() => handleDelete(r)} className="p-2 rounded-lg border border-black/10 hover:bg-black/5 cursor-pointer" aria-label="Delete">
                       <Trash2 className="w-4 h-4" />

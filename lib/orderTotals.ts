@@ -248,10 +248,9 @@ export function calculateBillTotals(input: BillCalculationInput | any): BillTota
     (rawGstRate > 0)
   );
 
-  const taxMode: 'exclusive' | 'inclusive' =
-    String(input.taxMode || input.tax_mode || 'exclusive').toLowerCase() === 'inclusive'
-      ? 'inclusive'
-      : 'exclusive';
+  // GST is always inclusive: saved orders don't persist tax_mode, so honoring
+  // it (and defaulting to exclusive) made invoices/bills disagree with the billing panel.
+  const taxMode: 'exclusive' | 'inclusive' = 'inclusive';
 
   let gstPercent = 0;
   let gstAmount = 0;

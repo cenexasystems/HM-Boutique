@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
 import { BRAND_EN } from "@/lib/brand";
+import { buildXlsx, type XlsxCell } from "@/lib/xlsx";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,7 @@ export default function AdminAnalyticsPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [period, setPeriod] = useState<PeriodKey>("all");
+  const [itemsData, setItemsData] = useState<any[]>([]);
 
   const formatINR = (val: number) =>
     Number(val || 0).toLocaleString("en-IN", {
@@ -68,6 +70,18 @@ export default function AdminAnalyticsPage() {
         return;
       }
       setSalesData(sales || []);
+
+      // Line items for the product-wise Excel export (chunked to keep URLs short)
+      const ids = (sales || []).map((s: any) => s.id);
+      const all: any[] = [];
+      for (let i = 0; i < ids.length; i += 100) {
+        const { data: its } = await supabase
+          .from("order_items")
+          .select("*")
+          .in("order_id", ids.slice(i, i + 100));
+        if (its) all.push(...its);
+      }
+      setItemsData(all);
     } catch (err) {
       console.error("[Analytics] Error loading sales data:", err);
     } finally {
@@ -167,6 +181,62 @@ export default function AdminAnalyticsPage() {
   });
   const maxMonthlyRevenue = Math.max(...monthlyRevenue, 1);
 
+  // Product-wise Excel: two sheets' worth of data in one - summary per product,
+  // then every sold line. `scope` = current period filter, or all completed sales.
+  const exportProductsExcel = (scope: "filtered" | "all") => {
+    const sales = scope === "filtered" ? filteredSales : salesData;
+    const byId = new Map(sales.map((s) => [s.id, s]));
+    const lines = itemsData.filter((it) => byId.has(it.order_id));
+    if (lines.length === 0) {
+      alert("No product sales to export");
+      return;
+    }
+    const summary = new Map<string, { qty: number; revenue: number; bills: Set<string> }>();
+    lines.forEach((it) => {
+      const name = it.snapshot_name || it.name || "Unknown";
+      const qty = Number(it.quantity ?? 1) || 1;
+      const rev = qty * (Number(it.snapshot_price ?? it.price ?? 0) || 0);
+      const e = summary.get(name) || { qty: 0, revenue: 0, bills: new Set<string>() };
+      e.qty += qty;
+      e.revenue += rev;
+      e.bills.add(it.order_id);
+      summary.set(name, e);
+    });
+    const rows: XlsxCell[][] = [...summary.entries()]
+      .sort((a, b) => b[1].revenue - a[1].revenue)
+      .map(([name, e], i) => [i + 1, name, e.qty, e.bills.size, Math.round(e.revenue * 100) / 100]);
+    const totalQty = rows.reduce((s, r) => s + (r[2] as number), 0);
+    const totalRev = rows.reduce((s, r) => s + (r[4] as number), 0);
+    rows.push(["", "TOTAL", totalQty, "", Math.round(totalRev * 100) / 100]);
+    rows.push([]);
+    rows.push(["", "Bill-wise product lines"]);
+    rows.push(["#", "Product", "Qty", "Bill ID", "Amount (₹)", "Date"]);
+    lines.forEach((it, i) => {
+      const o: any = byId.get(it.order_id);
+      const qty = Number(it.quantity ?? 1) || 1;
+      rows.push([
+        i + 1,
+        it.snapshot_name || it.name || "Unknown",
+        qty,
+        o?.invoice_no || it.order_id,
+        Math.round(qty * (Number(it.snapshot_price ?? it.price ?? 0) || 0) * 100) / 100,
+        o?.created_at ? new Date(o.created_at).toLocaleDateString("en-IN") : "",
+      ]);
+    });
+    const blob = buildXlsx({
+      sheetName: "Products",
+      headers: ["#", "Product", "Qty Sold", "No. of Bills", "Revenue (₹)", "Date"],
+      rows,
+      widths: [6, 36, 12, 22, 16, 14],
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `product-sales-${scope === "filtered" ? period : "all"}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="min-h-screen bg-[#FFF0F8] text-[#111111] font-sans p-4 sm:p-8">
       <div className="max-w-7xl mx-auto space-y-6">
@@ -198,6 +268,18 @@ export default function AdminAnalyticsPage() {
             >
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
               Refresh
+            </button>
+            <button
+              onClick={() => exportProductsExcel("filtered")}
+              className="px-3 py-2 bg-white hover:bg-[#F500A0]/5 text-[#F500A0] text-xs font-bold rounded-xl border border-[#F500A0] cursor-pointer"
+            >
+              Products Excel (Filtered)
+            </button>
+            <button
+              onClick={() => exportProductsExcel("all")}
+              className="px-3 py-2 bg-white hover:bg-[#F500A0]/5 text-[#F500A0] text-xs font-bold rounded-xl border border-[#F500A0] cursor-pointer"
+            >
+              Products Excel (All)
             </button>
             <Link
               href="/admin/orders"
