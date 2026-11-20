@@ -84,6 +84,8 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
     ? "CREDIT INVOICE"
     : isAdvance && !isSettled
     ? "ADVANCE RECEIPT"
+    : isGst
+    ? "TAX INVOICE"
     : "INVOICE";
 
   const formattedDate = order.created_at
@@ -127,6 +129,88 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
       : Array.isArray((order as any).order_items) && (order as any).order_items.length > 0
       ? ((order as any).order_items as PrintableReceiptItem[])
       : [];
+
+
+  // ── Payment summary rows (shared by thermal + A4) ──────────────────────────
+  const o: any = order;
+  const money = (n: number) => `₹${Number(n || 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const methodName = (m: string) =>
+    m === "GPAY" || m === "UPI" ? "GPay / UPI" : m === "CARD" ? "Card" : m === "SPLIT" ? "Split (Cash + GPay)" : m === "CASH" ? "Cash" : m;
+  const fmtShort = (d?: string | null) =>
+    d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "";
+
+  const settleMode = String(o.settle_mode || "").toUpperCase();
+  const settleCash = Number(o.settle_cash) || 0;
+  const settleGpay = Number(o.settle_gpay) || 0;
+  const settleAmount = Number(o.settle_amount) || 0;
+  const billSplitCash = Number(o.split_cash ?? o.splitCash) || 0;
+  const billSplitGpay = Number(o.split_gpay ?? o.splitGpay) || 0;
+  const billMode = String(
+    (isAdvance ? o.deposit_payment_mode : "") || o.payment_mode || o.payment_method || "CASH"
+  ).toUpperCase();
+  const advMode = String(o.advance_mode || "").toUpperCase();
+  const advCash = Number(o.advance_cash) || 0;
+  const advGpay = Number(o.advance_gpay) || 0;
+
+  type PayRow = { label: string; value: string; strong?: boolean; tone?: "good" | "bad" };
+  const payRows: PayRow[] = [];
+  const dueDateStr = fmtShort(o.credit_due_date || o.due_date);
+  // "Paid Via" line plus the cash/GPay breakdown when it was a split
+  const viaRows = (mode: string, cash: number, gpay: number, label = "Paid Via:"): PayRow[] => {
+    const rows: PayRow[] = [{ label, value: methodName(mode || "CASH") }];
+    if (mode === "SPLIT") {
+      rows.push({ label: "  Cash:", value: money(cash) });
+      rows.push({ label: "  GPay:", value: money(gpay) });
+    }
+    return rows;
+  };
+
+  if (isCredit || isAdvance) {
+    const kind = isCredit ? "Credit" : "Advance";
+    // Amount received before settlement (at billing for credit, deposit for advance)
+    const paidEarlier = isSettled
+      ? settleAmount > 0
+        ? Math.max(0, Math.round((totals.grandTotal - settleAmount) * 100) / 100)
+        : 0
+      : totals.paid;
+    payRows.push({ label: "Bill Total:", value: money(totals.grandTotal) });
+    if (isSettled) {
+      if (paidEarlier > 0) {
+        payRows.push({ label: isCredit ? "Paid at Billing:" : "Advance Paid:", value: money(paidEarlier) });
+        if (isAdvance) payRows.push(...viaRows(billMode, billSplitCash, billSplitGpay, "Advance Paid Via:"));
+      }
+      if (settleAmount > 0 || settleMode) {
+        payRows.push({ label: `${isCredit ? "Credit" : "Balance"} Settled${o.credit_paid_at ? " (" + fmtShort(o.credit_paid_at) + ")" : ""}:`, value: money(settleAmount || totals.grandTotal - paidEarlier) });
+        payRows.push(...viaRows(settleMode || "CASH", settleCash, settleGpay, "Balance Paid Via:"));
+      }
+      payRows.push({ label: "Total Paid:", value: money(totals.grandTotal), strong: true });
+    } else {
+      payRows.push({ label: isCredit ? "Paid So Far:" : "Advance Paid:", value: money(totals.paid), strong: true });
+      if (isAdvance && totals.paid > 0) payRows.push(...viaRows(billMode, billSplitCash, billSplitGpay, "Advance Paid Via:"));
+    }
+    payRows.push({ label: "Balance Due:", value: money(totals.balance), strong: true, tone: totals.balance === 0 ? "good" : "bad" });
+    if (!isSettled && dueDateStr) payRows.push({ label: "Due Date:", value: dueDateStr });
+    void kind;
+  } else if (Number(o.advance_paid_earlier) > 0) {
+    // Final invoice of an advance order: show the earlier deposit and how the balance was paid.
+    const earlier = Number(o.advance_paid_earlier) || 0;
+    const nowPaid = settleAmount > 0 ? settleAmount : Math.max(0, totals.grandTotal - earlier);
+    payRows.push({ label: "Bill Total:", value: money(totals.grandTotal) });
+    payRows.push({ label: "Advance Paid Earlier:", value: money(earlier) });
+    if (advMode) payRows.push(...viaRows(advMode, advCash, advGpay, "Advance Paid Via:"));
+    payRows.push({ label: "Balance Paid Now:", value: money(nowPaid) });
+    payRows.push(...viaRows(settleMode || billMode, settleCash || billSplitCash, settleGpay || billSplitGpay, "Balance Paid Via:"));
+    payRows.push({ label: "Total Paid:", value: money(totals.grandTotal), strong: true });
+    payRows.push({ label: "Balance Due:", value: money(0), strong: true, tone: "good" });
+  } else {
+    payRows.push({ label: "Paid Via:", value: methodName(billMode) });
+    if (billMode === "SPLIT") {
+      payRows.push({ label: "  Cash:", value: money(billSplitCash) });
+      payRows.push({ label: "  GPay:", value: money(billSplitGpay) });
+    }
+    payRows.push({ label: "Amount Paid:", value: money(totals.grandTotal), strong: true });
+    payRows.push({ label: "Balance Due:", value: money(0), strong: true, tone: "good" });
+  }
 
 
   if (paper === "thermal") {
@@ -243,13 +327,13 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
           </div>
           {totals.manualDiscount > 0 && (
             <div className="flex justify-between">
-              <span>Manual Discount:</span>
+              <span>Manual Discount{totals.discountType === "PERCENT" && totals.discountValue > 0 ? ` (${totals.discountValue}%)` : ""}:</span>
               <span className="tabular-nums">-₹{totals.manualDiscount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
             </div>
           )}
           {totals.couponDiscount > 0 && (
             <div className="flex justify-between">
-              <span>Coupon Discount:</span>
+              <span>Coupon{(order as any).coupon_code ? ` (${(order as any).coupon_code})` : ""}:</span>
               <span className="tabular-nums">-₹{totals.couponDiscount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
             </div>
           )}
@@ -263,6 +347,17 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
             <div className="flex justify-between">
               <span>Taxable Amount:</span>
               <span className="tabular-nums">₹{totals.taxableAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+            </div>
+          )}
+          {totals.gstAmount > 0 ? (
+            <div className="flex justify-between">
+              <span>GST @ {totals.gstPercent}% (incl.):</span>
+              <span className="tabular-nums">₹{totals.gstAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+            </div>
+          ) : (
+            <div className="flex justify-between">
+              <span>GST:</span>
+              <span>Non-GST bill</span>
             </div>
           )}
           {totals.gstAmount > 0 && (
@@ -289,21 +384,15 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
           </div>
         </div>
 
-        {/* Payment & Balance breakdown for Advance and Credit */}
-        {(isCredit || isAdvance) && (
-          <div className="text-[11px] py-1.5 border-b border-dashed border-black/60 mb-2 space-y-1">
-            <div className="flex justify-between">
-              <span>{isCredit ? (isSettled ? "Amount Paid:" : "Paid:") : (isSettled ? "Amount Paid:" : "Cash Received:")}</span>
-              <span className="font-bold tabular-nums">₹{totals.paid.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+        {/* Payment & Balance breakdown (credit / advance / normal) */}
+        <div className="text-[11px] py-1.5 border-b border-dashed border-black/60 mb-2 space-y-1">
+          {payRows.map((r, i) => (
+            <div key={i} className="flex justify-between gap-2">
+              <span className="whitespace-pre">{r.label}</span>
+              <span className={`tabular-nums ${r.strong ? "font-bold" : ""}`}>{r.value}</span>
             </div>
-            <div className="flex justify-between">
-              <span>Balance Due:</span>
-              <span className="font-bold tabular-nums">
-                ₹{totals.balance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-              </span>
-            </div>
-          </div>
-        )}
+          ))}
+        </div>
 
         <div className="text-[10px] space-y-1 mb-2">
           <p className="font-semibold text-center border-b border-dashed border-black/30 pb-1 mb-1">{paymentLabel}</p>
@@ -331,18 +420,30 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
         @media print {
           @page {
             size: ${size === "a5" ? "A5 portrait" : "A4 portrait"};
-            margin: 10mm;
+            margin: 6mm;
           }
           html, body {
             background: #ffffff !important;
             color: #000000 !important;
             margin: 0 !important;
             padding: 0 !important;
+            width: auto !important;
+            overflow: visible !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
           .no-print, .print-hidden, .print\:hidden {
             display: none !important;
+          }
+          .invoice-sheet, .invoice-sheet * {
+            box-sizing: border-box !important;
+          }
+          .invoice-sheet {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin: 0 !important;
+            padding: 8mm 9mm !important;
+            overflow: visible !important;
           }
         }
       `}</style>
@@ -365,7 +466,7 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
             </p>
           )}
         </div>
-        <div className="sm:text-right">
+        <div className="sm:text-right shrink-0">
           <span
             className={`inline-block px-3 py-1 text-xs font-black rounded uppercase tracking-wider ${
               isUnsettledCredit
@@ -492,7 +593,7 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
       {/* Totals & Breakdown: Accounting Layout */}
       <div className="border-t border-zinc-200 pt-4 flex flex-col sm:flex-row justify-between items-start gap-6 sm:gap-8 text-xs">
         {/* Left Side: Words Breakdown & Terms */}
-        <div className="space-y-3.5 max-w-sm flex-1 w-full">
+        <div className="space-y-3.5 max-w-sm flex-1 w-full min-w-0">
           <div>
             <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
               AMOUNT IN WORDS
@@ -502,31 +603,21 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
             </div>
           </div>
 
-          {/* Payment & Balance lines for credit/advance invoices */}
-          {(isCredit || isAdvance) && (
-            <div className="text-xs space-y-2 pt-2 border-t border-zinc-100">
-              <div className="flex justify-between items-center py-0.5">
-                <span className="text-slate-600 font-medium">
-                  {isCredit
-                    ? (isSettled ? "Amount Paid / Received:" : "Amount Paid:")
-                    : (isSettled ? "Amount Paid / Received:" : "Cash Received:")}
-                </span>
-                <span className="font-bold text-slate-900 font-mono tabular-nums">
-                  ₹{formatINR(totals.paid)}
-                </span>
-              </div>
-              <div className="flex justify-between items-center py-0.5">
-                <span className="text-slate-600 font-medium">Balance Due:</span>
+          {/* Payment & Balance lines (credit / advance / normal) */}
+          <div className="text-xs space-y-2 pt-2 border-t border-zinc-100">
+            {payRows.map((r, i) => (
+              <div key={i} className="flex justify-between items-center py-0.5 gap-3">
+                <span className="text-slate-600 font-medium whitespace-pre">{r.label}</span>
                 <span
-                  className={`font-bold font-mono tabular-nums ${
-                    totals.balance === 0 ? "text-emerald-600" : "text-rose-600"
+                  className={`font-mono tabular-nums ${r.strong ? "font-bold" : "font-medium"} ${
+                    r.tone === "good" ? "text-emerald-600" : r.tone === "bad" ? "text-rose-600" : "text-slate-900"
                   }`}
                 >
-                  ₹{formatINR(totals.balance)}
+                  {r.value}
                 </span>
               </div>
-            </div>
-          )}
+            ))}
+          </div>
 
           {/* Terms & Notes */}
           <div className="text-[11px] text-slate-500 leading-relaxed pt-2 space-y-0.5 border-t border-zinc-100">
@@ -538,7 +629,7 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
         </div>
 
         {/* Right Side: Financial Lines & Grand Total Block */}
-        <InvoiceTotalsBlock totals={totals} />
+        <InvoiceTotalsBlock totals={totals} couponCode={(order as any).coupon_code || null} />
       </div>
 
       {/* Footer */}

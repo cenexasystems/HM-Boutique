@@ -1,3 +1,4 @@
+import { metaToOrderFields, buildSplitDetails } from './orderMeta';
 import { sql } from './db';
 import { BROCHURE_CATALOGUE_ITEMS, OFFICIAL_COURSE_CATEGORIES, catalogItemToProduct } from './courses';
 import { isSupabaseConfigured, supabase } from './supabase';
@@ -733,7 +734,7 @@ export const dbStore = {
               Number(o.total_gst || o.gst_amount || 0) > 0 ||
               o.is_gst ||
               o.gst_enabled ||
-              (total > 0 && rawSubtotal > 0 && total > rawSubtotal)
+              (o.gst_enabled == null && o.is_gst == null && total > 0 && rawSubtotal > 0 && total > rawSubtotal)
             );
             const gstAmount = Number(
               o.total_gst ||
@@ -761,17 +762,21 @@ export const dbStore = {
               status: (o.status || 'COMPLETED').toUpperCase() as 'COMPLETED' | 'PENDING',
               is_gst: isGst,
               subtotal,
-              discount_type: 'FIXED',
-              discount_value: discount,
+              discount_type: String(o.manual_discount_type || '').toLowerCase() === 'percent' && metaToOrderFields(o).fields.manualDiscount !== undefined ? 'PERCENT' : 'FIXED',
+              discount_value: String(o.manual_discount_type || '').toLowerCase() === 'percent' && metaToOrderFields(o).fields.manualDiscount !== undefined ? Number(o.manual_discount_value || 0) : discount,
               discount_amount: discount,
-              gst_percentage: gstPercentage,
+              gst_percentage: metaToOrderFields(o).gstPercentage || gstPercentage,
               gst_amount: gstAmount,
               delivery_fee: Number(o.delivery_charge || o.delivery_fee || 0),
               grand_total: total,
               total,
-              cash_received: Number(o.cash_received || total),
-              split_cash: Number(o.split_cash || 0),
-              split_gpay: Number(o.split_gpay || 0),
+              cash_received: Number(o.cash_received ?? (Boolean(o.is_credit) ? 0 : total)),
+              amount_paid: o.amount_paid ?? undefined,
+              balance_due: o.balance_due ?? undefined,
+              due_date: o.due_date || o.credit_due_date || null,
+              split_cash: Number(metaToOrderFields(o).fields.split_cash) || 0,
+              split_gpay: Number(metaToOrderFields(o).fields.split_gpay) || 0,
+              ...metaToOrderFields(o).fields,
               payment_mode: (String(o.payment_mode || o.payment_method || 'CASH').toUpperCase()) as PaymentMode,
               bill_date: o.created_at || new Date().toISOString(),
               created_at: o.created_at || new Date().toISOString(),
@@ -978,7 +983,7 @@ export const dbStore = {
             Number(row.total_gst || row.gst_amount || 0) > 0 ||
             row.is_gst ||
             row.gst_enabled ||
-            (total > 0 && rawSubtotal > 0 && total > rawSubtotal)
+            (row.gst_enabled == null && row.is_gst == null && total > 0 && rawSubtotal > 0 && total > rawSubtotal)
           );
           const gstAmount = Number(
             row.total_gst ||
@@ -1004,17 +1009,21 @@ export const dbStore = {
             status: (row.status || 'COMPLETED').toUpperCase() as 'COMPLETED' | 'PENDING',
             is_gst: isGst,
             subtotal,
-            discount_type: 'FIXED',
-            discount_value: discount,
+            discount_type: String(row.manual_discount_type || '').toLowerCase() === 'percent' && metaToOrderFields(row).fields.manualDiscount !== undefined ? 'PERCENT' : 'FIXED',
+            discount_value: String(row.manual_discount_type || '').toLowerCase() === 'percent' && metaToOrderFields(row).fields.manualDiscount !== undefined ? Number(row.manual_discount_value || 0) : discount,
             discount_amount: discount,
-            gst_percentage: gstPercentage,
+            gst_percentage: metaToOrderFields(row).gstPercentage || gstPercentage,
             gst_amount: gstAmount,
             delivery_fee: Number(row.delivery_charge || row.delivery_fee || 0),
             grand_total: total,
             total,
-            cash_received: Number(row.cash_received || row.received_amount || total),
-            split_cash: Number(row.split_cash || row.split_details?.cash || 0),
-            split_gpay: Number(row.split_gpay || row.split_details?.gpay || 0),
+            cash_received: Number(row.cash_received ?? row.received_amount ?? (Boolean(row.is_credit) ? 0 : total)),
+            amount_paid: row.amount_paid ?? undefined,
+            balance_due: row.balance_due ?? undefined,
+            due_date: row.due_date || row.credit_due_date || null,
+            split_cash: Number(metaToOrderFields(row).fields.split_cash) || 0,
+            split_gpay: Number(metaToOrderFields(row).fields.split_gpay) || 0,
+            ...metaToOrderFields(row).fields,
             payment_mode: (String(row.payment_mode || row.payment_method || 'CASH').toUpperCase()) as PaymentMode,
             bill_date: row.billing_date || row.created_at || new Date().toISOString(),
             created_at: row.created_at || new Date().toISOString(),
@@ -1137,6 +1146,13 @@ export const dbStore = {
     splitGpay?: number;
     paymentMode: PaymentMode;
     couponCode?: string | null;
+    manualDiscountAmount?: number;
+    couponDiscountAmount?: number;
+    advancePaidEarlier?: number;
+    advanceMode?: string;
+    advanceCash?: number;
+    advanceGpay?: number;
+    settlePayment?: { mode: 'CASH' | 'GPAY' | 'SPLIT'; cash: number; gpay: number; amount: number; at?: string };
     remarks?: string | null;
     referenceNumber?: string | null;
     creditDueDate?: string | null;
@@ -1182,7 +1198,7 @@ export const dbStore = {
           subtotal: baseSubtotal,
           total: payload.grandTotal,
           discount_amount: payload.discountAmount,
-          manual_discount_amount: 0,
+          manual_discount_amount: Number(payload.manualDiscountAmount) || 0,
           manual_discount_type: payload.discountType === 'PERCENT' ? 'percent' : 'flat',
           manual_discount_value: payload.discountValue || 0,
           gst_enabled: isGst,
@@ -1196,7 +1212,18 @@ export const dbStore = {
           balance_due: isCredit ? Math.max(0, payload.grandTotal - (Number(payload.cashReceived) || 0)) : 0,
           due_date: isCredit ? (payload.creditDueDate || null) : null,
           credit_due_date: isCredit ? (payload.creditDueDate || null) : null,
-          split_details: payload.paymentMode === 'SPLIT' ? { cash: Number(payload.splitCash) || 0, gpay: Number(payload.splitGpay) || 0 } : {},
+          split_details: buildSplitDetails({
+            cash: payload.paymentMode === 'SPLIT' ? Number(payload.splitCash) || 0 : undefined,
+            gpay: payload.paymentMode === 'SPLIT' ? Number(payload.splitGpay) || 0 : undefined,
+            gstPercentage: isGst ? Number(payload.gstPercentage) || 0 : 0,
+            manualDiscount: payload.manualDiscountAmount !== undefined ? Number(payload.manualDiscountAmount) || 0 : Number(payload.discountAmount) || 0,
+            couponDiscount: Number(payload.couponDiscountAmount) || 0,
+            advancePaid: payload.advancePaidEarlier,
+            advanceMode: payload.advanceMode,
+            advanceCash: payload.advanceCash,
+            advanceGpay: payload.advanceGpay,
+            settle: payload.settlePayment,
+          }),
           coupon_code: payload.couponCode || null,
           items: structuredItems,
           notes: payload.remarks || null,
@@ -1666,7 +1693,7 @@ export const dbStore = {
               matchedOrd?.gst_enabled ||
               matchedOrd?.is_gst ||
               Number(matchedOrd?.total_gst || matchedOrd?.gst_amount || 0) > 0 ||
-              (totalAmt > 0 && rawSubtotal > 0 && totalAmt > rawSubtotal)
+              (matchedOrd?.gst_enabled == null && matchedOrd?.is_gst == null && totalAmt > 0 && rawSubtotal > 0 && totalAmt > rawSubtotal)
             );
             const gstAmount = Number(
               matchedOrd?.total_gst ||
@@ -1677,6 +1704,7 @@ export const dbStore = {
               ? rawSubtotal
               : (gstAmount > 0 ? totalAmt - gstAmount : totalAmt);
             const gstPercentage = Number(
+              metaToOrderFields(matchedOrd).gstPercentage ||
               matchedOrd?.gst_percentage ||
               matchedOrd?.gst_rate ||
               (gstAmount > 0 && subtotal > 0 ? Math.round((gstAmount / subtotal) * 100) : (isGst ? 18 : 0))
@@ -1715,6 +1743,8 @@ export const dbStore = {
               delivery_fee: deliveryFee,
               amount_paid: depAmt,
               balance_due: balDue,
+              ...metaToOrderFields(matchedOrd).fields,
+              ...({ credit_paid_at: matchedOrd?.credit_paid_at || a.completed_at || null } as Record<string, any>),
               items,
             });
           }
@@ -1752,7 +1782,7 @@ export const dbStore = {
           o.gst_enabled ||
           o.is_gst ||
           Number(o.total_gst || o.gst_amount || 0) > 0 ||
-          (totalAmt > 0 && rawSubtotal > 0 && totalAmt > rawSubtotal)
+          (o.gst_enabled == null && o.is_gst == null && totalAmt > 0 && rawSubtotal > 0 && totalAmt > rawSubtotal)
         );
         const gstAmount = Number(
           o.total_gst ||
@@ -1763,6 +1793,7 @@ export const dbStore = {
           ? rawSubtotal
           : (gstAmount > 0 ? totalAmt - gstAmount : totalAmt);
         const gstPercentage = Number(
+          metaToOrderFields(o).gstPercentage ||
           o.gst_percentage ||
           o.gst_rate ||
           (gstAmount > 0 && subtotal > 0 ? Math.round((gstAmount / subtotal) * 100) : (isGst ? 18 : 0))
@@ -1800,6 +1831,8 @@ export const dbStore = {
           delivery_fee: deliveryFee,
           amount_paid: depAmt,
           balance_due: Number(o.balance_due ?? Math.max(0, totalAmt - depAmt)),
+          ...metaToOrderFields(o).fields,
+          ...({ credit_paid_at: o.credit_paid_at || null } as Record<string, any>),
           items: items.length > 0 ? items : [{
             id: `${o.id}-item`,
             advance_order_id: advId,
@@ -1880,7 +1913,7 @@ export const dbStore = {
             ord.gst_enabled ||
             ord.is_gst ||
             Number(ord.total_gst || ord.gst_amount || 0) > 0 ||
-            (totalAmt > 0 && rawSubtotal > 0 && totalAmt > rawSubtotal)
+            (ord.gst_enabled == null && ord.is_gst == null && totalAmt > 0 && rawSubtotal > 0 && totalAmt > rawSubtotal)
           );
           const gstAmount = Number(
             ord.total_gst ||
@@ -1891,6 +1924,7 @@ export const dbStore = {
             ? rawSubtotal
             : (gstAmount > 0 ? totalAmt - gstAmount : totalAmt);
           const gstPercentage = Number(
+            metaToOrderFields(ord).gstPercentage ||
             ord.gst_percentage ||
             ord.gst_rate ||
             (gstAmount > 0 && subtotal > 0 ? Math.round((gstAmount / subtotal) * 100) : (isGst ? 18 : 0))
@@ -1924,6 +1958,8 @@ export const dbStore = {
             delivery_fee: Number(ord.delivery_charge || ord.delivery_fee || 0),
             amount_paid: depAmt,
             balance_due: Number(ord.balance_due ?? Math.max(0, totalAmt - depAmt)),
+            ...metaToOrderFields(ord).fields,
+            credit_paid_at: ord.credit_paid_at || null,
             items: mappedAdvItems.length > 0 ? mappedAdvItems : [{
               id: `${ord.id}-item`,
               advance_order_id: ord.invoice_no || String(ord.id),
@@ -1962,6 +1998,11 @@ export const dbStore = {
     discountAmount?: number;
     discountType?: 'PERCENT' | 'FIXED';
     discountValue?: number;
+    manualDiscountAmount?: number;
+    couponDiscountAmount?: number;
+    couponCode?: string | null;
+    depositSplitCash?: number;
+    depositSplitGpay?: number;
     deliveryFee?: number;
     items: {
       product_id: string | null;
@@ -2029,9 +2070,17 @@ export const dbStore = {
             subtotal: payload.subtotal,
             total: payload.totalAmount,
             discount_amount: payload.discountAmount || 0,
-            manual_discount_amount: 0,
+            manual_discount_amount: Number(payload.manualDiscountAmount) || 0,
             manual_discount_type: payload.discountType === 'PERCENT' ? 'percent' : 'flat',
             manual_discount_value: payload.discountValue || 0,
+            coupon_code: payload.couponCode || null,
+            split_details: buildSplitDetails({
+              cash: payload.depositPaymentMode === 'SPLIT' ? Number(payload.depositSplitCash) || 0 : undefined,
+              gpay: payload.depositPaymentMode === 'SPLIT' ? Number(payload.depositSplitGpay) || 0 : undefined,
+              gstPercentage: isGst ? Number(payload.gstPercentage) || 0 : 0,
+              manualDiscount: payload.manualDiscountAmount !== undefined ? Number(payload.manualDiscountAmount) || 0 : Number(payload.discountAmount) || 0,
+              couponDiscount: Number(payload.couponDiscountAmount) || 0,
+            }),
             gst_enabled: isGst,
             total_gst: isGst ? (payload.gstAmount || 0) : 0,
             gst_amount: isGst ? (payload.gstAmount || 0) : 0,
@@ -2285,6 +2334,11 @@ export const dbStore = {
     deliveryFee: number;
     paymentMode: PaymentMode;
     billDate: string;
+    manualDiscountAmount?: number;
+    couponDiscountAmount?: number;
+    couponCode?: string | null;
+    splitCash?: number;
+    splitGpay?: number;
   }): Promise<{ orderId: string }> {
     // Idempotency check: if an order with this reference number or invoiceId already exists, do not duplicate
     if (isSupabaseConfigured) {
@@ -2315,16 +2369,39 @@ export const dbStore = {
     }));
 
     const rawSubtotal = cart.reduce((acc, i) => acc + i.price * i.qty, 0);
+    // Reuse the exact discount split saved on the advance bill so the final invoice
+    // total always equals the advance total (coupon included).
+    const advTotalsFull = calculateOrderTotals(advance);
+    const manualAmt = payload.manualDiscountAmount ?? advTotalsFull.manualDiscount;
+    const couponAmt = payload.couponDiscountAmount ?? advTotalsFull.couponDiscount;
     const orderTotals = calculateOrderTotals({
       items: cart,
       subtotal: rawSubtotal,
-      discount_amount: payload.discountAmount,
+      manualDiscount: manualAmt,
+      couponDiscount: couponAmt,
       discount_type: payload.discountType,
       discount_value: payload.discountValue,
       is_gst: payload.isGst,
       gst_percentage: payload.gstPercentage,
       delivery_fee: payload.deliveryFee,
     });
+
+    // How the earlier deposit and the closing balance were each paid.
+    const depositModeRaw = String((advance as any).deposit_payment_mode || (advance as any).payment_mode || 'CASH').toUpperCase();
+    const depMode = depositModeRaw === 'GPAY' || depositModeRaw === 'SPLIT' ? depositModeRaw : 'CASH';
+    const depPaid = advTotalsFull.paid;
+    const depCash = depMode === 'SPLIT' ? Number((advance as any).split_cash) || 0 : depMode === 'GPAY' ? 0 : depPaid;
+    const depGpay = depMode === 'SPLIT' ? Number((advance as any).split_gpay) || 0 : depMode === 'GPAY' ? depPaid : 0;
+    const balanceNow = Math.max(0, Math.round((orderTotals.total - depPaid) * 100) / 100);
+    const balMode: 'CASH' | 'GPAY' | 'SPLIT' = payload.paymentMode === 'GPAY' || payload.paymentMode === 'SPLIT' ? payload.paymentMode : 'CASH';
+    const balCash = balMode === 'SPLIT' ? Number(payload.splitCash) || 0 : balMode === 'GPAY' ? 0 : balanceNow;
+    const balGpay = balMode === 'SPLIT' ? Number(payload.splitGpay) || 0 : balMode === 'GPAY' ? balanceNow : 0;
+    if (balMode === 'SPLIT' && Math.abs(balCash + balGpay - balanceNow) > 0.009) {
+      throw new Error('Split amounts must add up to the balance due');
+    }
+    const overallCash = Math.round((depCash + balCash) * 100) / 100;
+    const overallGpay = Math.round((depGpay + balGpay) * 100) / 100;
+    const overallMode: PaymentMode = overallCash > 0 && overallGpay > 0 ? 'SPLIT' : overallGpay > 0 ? 'GPAY' : 'CASH';
 
     const { orderId } = await this.submitOrder({
       orderId: payload.invoiceId,
@@ -2343,13 +2420,49 @@ export const dbStore = {
       deliveryFee: orderTotals.deliveryFee,
       grandTotal: orderTotals.total,
       cashReceived: orderTotals.total,
-      paymentMode: payload.paymentMode,
+      paymentMode: overallMode,
+      splitCash: overallMode === 'SPLIT' ? overallCash : 0,
+      splitGpay: overallMode === 'SPLIT' ? overallGpay : 0,
+      manualDiscountAmount: orderTotals.manualDiscount,
+      couponDiscountAmount: orderTotals.couponDiscount,
+      couponCode: payload.couponCode || (advance as any).coupon_code || null,
+      advancePaidEarlier: advTotalsFull.paid,
+      advanceMode: depMode,
+      advanceCash: depCash,
+      advanceGpay: depGpay,
+      settlePayment: {
+        mode: balMode,
+        cash: balCash,
+        gpay: balGpay,
+        amount: balanceNow,
+        at: payload.billDate,
+      },
       referenceNumber: payload.advanceOrderId,
       remarks: `Advance order hold completed: #${payload.advanceOrderId}`,
     });
 
     await this.updateAdvanceOrderStatus(payload.advanceOrderId, 'COMPLETED');
     if (isSupabaseConfigured) {
+      // Keep the advance (DEP-) receipt in sync: record how the balance was paid.
+      try {
+        const { data: depRow } = await supabase
+          .from('orders')
+          .select('id, split_details')
+          .eq('invoice_no', payload.advanceOrderId)
+          .maybeSingle();
+        if (depRow?.id) {
+          await supabase
+            .from('orders')
+            .update({
+              credit_paid_at: payload.billDate,
+              split_details: buildSplitDetails({
+                existing: depRow.split_details,
+                settle: { mode: balMode, cash: balCash, gpay: balGpay, amount: balanceNow, at: payload.billDate },
+              }),
+            })
+            .eq('id', depRow.id);
+        }
+      } catch {}
       try {
         await supabase
           .from('advance_orders')
@@ -2415,11 +2528,16 @@ export const dbStore = {
         const { error } = await supabase
           .from('orders')
           .update({
-            credit_due_date: dueDate,
+            // keep both columns in sync - readers prefer due_date, so a stale one hides the change
+            due_date: dueDate || null,
+            credit_due_date: dueDate || null,
             updated_at: new Date().toISOString(),
           })
           .or(keyFilter(orderId));
-        if (error) console.warn('Supabase updateCreditDueDate failed:', error);
+        if (error) {
+          console.warn('Supabase updateCreditDueDate failed:', error);
+          throw new Error(error.message);
+        }
       } catch (e) {
         console.warn('Supabase updateCreditDueDate error:', e);
       }

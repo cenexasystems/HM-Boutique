@@ -1,5 +1,6 @@
 "use client";
 
+import CreditDueNotifier from "@/app/components/CreditDueNotifier";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -125,6 +126,7 @@ const EXPENSE_PAYMENT_MODES = ["CASH", "UPI", "CARD", "BANK", "OTHER"] as const;
 // ORDER_PAYMENT_MODES is used for single-mode contexts (advance deposit / balance).
 // POS_PAYMENT_MODES adds Split and Credit for full sales at the billing counter.
 const ORDER_PAYMENT_MODES = ["CASH", "GPAY"] as const;
+const ADV_PAYMENT_MODES = ["CASH", "GPAY", "SPLIT"] as const;
 const POS_PAYMENT_MODES = ["CASH", "GPAY", "SPLIT", "CREDIT"] as const;
 type OrderPaymentMode = "CASH" | "GPAY" | "SPLIT" | "CREDIT";
 
@@ -213,6 +215,10 @@ type CompletedOrder = {
   cashReceived: number;
   splitCash?: number;
   splitGpay?: number;
+  settle_cash?: number;
+  settle_gpay?: number;
+  advance_cash?: number;
+  advance_gpay?: number;
   paymentMode: OrderPaymentMode;
   date: string;
   createdAt: string;
@@ -465,6 +471,10 @@ export default function POSBilling() {
   const [advDeliveryDate, setAdvDeliveryDate] = useState<string>("");
   const [advNotes, setAdvNotes] = useState<string>("");
   const [advDepositPaymentMode, setAdvDepositPaymentMode] = useState<OrderPaymentMode>("CASH");
+  const [advSplitCash, setAdvSplitCash] = useState<string>("");
+  const [advSplitGpay, setAdvSplitGpay] = useState<string>("");
+  const [recvSplitCash, setRecvSplitCash] = useState<string>("");
+  const [recvSplitGpay, setRecvSplitGpay] = useState<string>("");
   const [isSavingAdvance, setIsSavingAdvance] = useState(false);
 
   const [selectedAdvance, setSelectedAdvance] = useState<AdvanceOrderWithRelations | null>(null);
@@ -786,6 +796,10 @@ export default function POSBilling() {
             cashReceived: Number(o.cash_received) || 0,
             splitCash: Number((o as { split_cash?: number }).split_cash) || 0,
             splitGpay: Number((o as { split_gpay?: number }).split_gpay) || 0,
+            settle_cash: Number((o as any).settle_cash) || 0,
+            settle_gpay: Number((o as any).settle_gpay) || 0,
+            advance_cash: Number((o as any).advance_cash) || 0,
+            advance_gpay: Number((o as any).advance_gpay) || 0,
             paymentMode: (POS_PAYMENT_MODES as readonly string[]).includes(
               String(o.payment_mode),
             )
@@ -1399,6 +1413,8 @@ export default function POSBilling() {
       return;
     }
     setAdvDeposit("");
+    setAdvSplitCash("");
+    setAdvSplitGpay("");
     setAdvDeliveryDate("");
     setAdvNotes("");
     setAdvDepositPaymentMode(paymentMode);
@@ -1415,6 +1431,15 @@ export default function POSBilling() {
     if (deposit > grandTotal) {
       alert("Deposit cannot exceed the grand total. Use 'Complete Sale' for full payment.");
       return;
+    }
+
+    if (advDepositPaymentMode === "SPLIT") {
+      const sc = Number(advSplitCash) || 0;
+      const sg = Number(advSplitGpay) || 0;
+      if (Math.abs(sc + sg - deposit) > 0.009) {
+        alert("Cash + GPay must add up to the deposit amount.");
+        return;
+      }
     }
 
     const advId = generateAdvanceOrderId();
@@ -1437,6 +1462,11 @@ export default function POSBilling() {
         discountAmount: calculatedDiscount,
         discountType: discountType === "percent" ? "PERCENT" : "FIXED",
         discountValue: Number(discountValue) || 0,
+        manualDiscountAmount: manualDiscount,
+        couponDiscountAmount: couponDiscount,
+        couponCode: appliedCoupon?.code || null,
+        depositSplitCash: advDepositPaymentMode === "SPLIT" ? Number(advSplitCash) || 0 : 0,
+        depositSplitGpay: advDepositPaymentMode === "SPLIT" ? Number(advSplitGpay) || 0 : 0,
         deliveryFee: Number(deliveryFee) || 0,
         items: items.map((i) => ({
           product_id: i.product_id || null,
@@ -1514,6 +1544,8 @@ export default function POSBilling() {
     setSelectedAdvance(adv);
     setAdvanceViewMode("receive");
     setReceivePaymentMode("CASH");
+    setRecvSplitCash("");
+    setRecvSplitGpay("");
     setReceiveDiscountValue(0);
     setReceiveDiscountType("fixed");
     const advTotals = getOrderTotals(adv);
@@ -1547,6 +1579,14 @@ export default function POSBilling() {
       const finalGrandTotal = advTotals.grandTotal;
       const advancePaidEarlier = advTotals.paid;
       const finalAmountPaidNow = advTotals.balance;
+      const recvCash = receivePaymentMode === "SPLIT" ? Number(recvSplitCash) || 0 : receivePaymentMode === "GPAY" ? 0 : finalAmountPaidNow;
+      const recvGpay = receivePaymentMode === "SPLIT" ? Number(recvSplitGpay) || 0 : receivePaymentMode === "GPAY" ? finalAmountPaidNow : 0;
+      if (receivePaymentMode === "SPLIT" && Math.abs(recvCash + recvGpay - finalAmountPaidNow) > 0.009) {
+        alert("Cash + GPay must add up to the balance due.");
+        setIsFinalizing(false);
+        return;
+      }
+      const depMode = String((selectedAdvance as any).deposit_payment_mode || "CASH").toUpperCase();
 
       const advItems = selectedAdvance.items.map((i, idx) => ({
         id: `oi-${invoiceId}-${idx}`,
@@ -1573,6 +1613,8 @@ export default function POSBilling() {
         discountAmount: cappedDiscount,
         deliveryFee: advTotals.deliveryFee,
         paymentMode: receivePaymentMode,
+        splitCash: recvCash,
+        splitGpay: recvGpay,
         billDate: nowIso,
       });
 
@@ -1608,6 +1650,16 @@ export default function POSBilling() {
         cash_received: finalAmountPaidNow,
         actualAmountReceived: finalAmountPaidNow,
         advancePaidEarlier: advancePaidEarlier,
+        manualDiscount: advTotals.manualDiscount,
+        couponDiscount: advTotals.couponDiscount,
+        advance_paid_earlier: advancePaidEarlier,
+        settle_mode: receivePaymentMode === "GPAY" || receivePaymentMode === "SPLIT" ? receivePaymentMode : "CASH",
+        settle_cash: recvCash,
+        settle_gpay: recvGpay,
+        advance_mode: depMode,
+        advance_cash: depMode === "SPLIT" ? Number((selectedAdvance as any).split_cash) || 0 : depMode === "GPAY" ? 0 : advancePaidEarlier,
+        advance_gpay: depMode === "SPLIT" ? Number((selectedAdvance as any).split_gpay) || 0 : depMode === "GPAY" ? advancePaidEarlier : 0,
+        settle_amount: finalAmountPaidNow,
         changeReturned: 0,
         amount_paid: finalGrandTotal,
         balance_due: 0,
@@ -1819,6 +1871,9 @@ export default function POSBilling() {
         splitGpay: splitGpayVal,
         paymentMode: paymentMode,
         creditDueDate: paymentMode === "CREDIT" ? (creditDueDate || null) : null,
+        couponCode: appliedCoupon?.code || null,
+        manualDiscountAmount: localTotals.manualDiscount,
+        couponDiscountAmount: localTotals.couponDiscount,
       });
 
       await saveBillMeasurements(newOrderId, "INVOICE", itemsToSave);
@@ -1850,6 +1905,10 @@ export default function POSBilling() {
         subtotal: Number(localSubtotal) || 0,
         discount: Number(localCalculatedDiscount) || 0,
         discount_amount: Number(localCalculatedDiscount) || 0,
+        manualDiscount: localTotals.manualDiscount,
+        couponDiscount: localTotals.couponDiscount,
+        split_cash: splitCashVal,
+        split_gpay: splitGpayVal,
         discountType: discountType === "percent" ? "PERCENT" : "FIXED",
         discountValue: discountValue ? Number(discountValue) : undefined,
         gstPercentage: applyGST ? Number(gstPercentage) : 0,
@@ -2322,6 +2381,7 @@ export default function POSBilling() {
     offlineOrders,
     onlineRevenue,
     offlineRevenue,
+    payTotals,
     topItems,
     currentWeekNumber,
     weekRevenue,
@@ -2456,6 +2516,45 @@ export default function POSBilling() {
     const offlineRevenue = analyticsFilteredOrders
       .filter((o) => o.source === "OFFLINE")
       .reduce((acc, o) => acc + o.grandTotal, 0);
+
+    // Money received per payment mode. A split bill adds its cash part to Cash and its
+    // GPay part to GPay; a settled credit / completed advance uses the settlement (+ deposit) split.
+    const payTotals = { cash: 0, gpay: 0, other: 0, cashBills: 0, gpayBills: 0, otherBills: 0, splitBills: 0 };
+    analyticsFilteredOrders.forEach((o) => {
+      const total = Number(o.grandTotal) || 0;
+      const sc = Number(o.splitCash) || 0;
+      const sg = Number(o.splitGpay) || 0;
+      const stc = Number(o.settle_cash) || 0;
+      const stg = Number(o.settle_gpay) || 0;
+      let cash = 0;
+      let gpay = 0;
+      let other = 0;
+      const modeRaw = String(
+        (o as any).payment_mode || (o as any).payment_method || o.paymentMode || "CASH",
+      ).toUpperCase();
+      if (sc + sg > 0) {
+        cash = sc;
+        gpay = sg;
+      } else if (stc + stg > 0) {
+        cash = stc + (Number(o.advance_cash) || 0);
+        gpay = stg + (Number(o.advance_gpay) || 0);
+      }
+      const known = cash + gpay;
+      if (known < total - 0.009) {
+        // remainder (or the whole bill when no split info) goes by the bill's payment mode
+        const rest = Math.round((total - known) * 100) / 100;
+        if (modeRaw === "GPAY" || modeRaw === "UPI") gpay += rest;
+        else if (modeRaw === "CARD") other += rest;
+        else cash += rest;
+      }
+      payTotals.cash += cash;
+      payTotals.gpay += gpay;
+      payTotals.other += other;
+      if (cash > 0) payTotals.cashBills++;
+      if (gpay > 0) payTotals.gpayBills++;
+      if (other > 0) payTotals.otherBills++;
+      if (cash > 0 && gpay > 0) payTotals.splitBills++;
+    });
 
     // Top items by revenue in analyticsFilteredOrders
     const itemSales: Record<
@@ -2676,6 +2775,7 @@ export default function POSBilling() {
       offlineOrders,
       onlineRevenue,
       offlineRevenue,
+      payTotals,
       topItems,
       currentWeekNumber,
       weekRevenue,
@@ -3114,6 +3214,7 @@ export default function POSBilling() {
 
   return (
     <div className="min-h-screen bg-[#FFFFFF] text-[#000000] flex flex-row font-sans overflow-hidden">
+      <CreditDueNotifier />
       {/* Category Management Modal */}
       {showCategoryModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[110] flex items-center justify-center p-4">
@@ -4987,8 +5088,8 @@ export default function POSBilling() {
 
                 <div>
                   <label className="block text-[10px] font-bold text-[#000000] uppercase tracking-wider mb-1.5">Deposit Payment Mode</label>
-                  <div className="grid grid-cols-2 gap-1.5">
-                    {ORDER_PAYMENT_MODES.map((mode) => (
+                  <div className="grid grid-cols-3 gap-1.5">
+                    {ADV_PAYMENT_MODES.map((mode) => (
                       <button
                         key={mode}
                         onClick={() => setAdvDepositPaymentMode(mode)}
@@ -5000,6 +5101,22 @@ export default function POSBilling() {
                       </button>
                     ))}
                   </div>
+                  {advDepositPaymentMode === "SPLIT" && (
+                    <div className="mt-2 space-y-1.5">
+                      <div className="grid grid-cols-2 gap-2">
+                        <input type="number" min="0" value={advSplitCash} onChange={(e) => setAdvSplitCash(e.target.value)} placeholder="Cash ₹" className="border border-black/15 rounded-lg px-2 py-1.5 text-sm font-bold" />
+                        <input type="number" min="0" value={advSplitGpay} onChange={(e) => setAdvSplitGpay(e.target.value)} placeholder="GPay ₹" className="border border-black/15 rounded-lg px-2 py-1.5 text-sm font-bold" />
+                      </div>
+                      {(() => {
+                        const diff = Math.round(((Number(advDeposit) || 0) - ((Number(advSplitCash) || 0) + (Number(advSplitGpay) || 0))) * 100) / 100;
+                        return (
+                          <p className={`text-[10px] font-bold ${diff === 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                            {diff === 0 ? "Split matches the deposit" : diff > 0 ? `₹${formatINR(diff)} still short of the deposit` : `₹${formatINR(-diff)} more than the deposit`}
+                          </p>
+                        );
+                      })()}
+                    </div>
+                  )}
                 </div>
 
                 <div>
@@ -5117,7 +5234,7 @@ export default function POSBilling() {
                         <label className="block text-[11px] font-bold text-slate-800 tracking-wide uppercase mb-1.5">
                           PAYMENT METHOD
                         </label>
-                        <div className="grid grid-cols-2 gap-2">
+                        <div className="grid grid-cols-3 gap-2">
                           <button
                             type="button"
                             onClick={() => setReceivePaymentMode("CASH")}
@@ -5140,7 +5257,34 @@ export default function POSBilling() {
                           >
                             GPAY
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => setReceivePaymentMode("SPLIT")}
+                            className={`py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all cursor-pointer ${
+                              receivePaymentMode === "SPLIT"
+                                ? "bg-[#334E68] text-white shadow-xs"
+                                : "bg-white border border-slate-200 text-slate-700 hover:border-slate-400"
+                            }`}
+                          >
+                            SPLIT
+                          </button>
                         </div>
+                        {receivePaymentMode === "SPLIT" && (
+                          <div className="mt-2 space-y-1.5">
+                            <div className="grid grid-cols-2 gap-2">
+                              <input type="number" min="0" value={recvSplitCash} onChange={(e) => setRecvSplitCash(e.target.value)} placeholder="Cash ₹" className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold" />
+                              <input type="number" min="0" value={recvSplitGpay} onChange={(e) => setRecvSplitGpay(e.target.value)} placeholder="GPay ₹" className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold" />
+                            </div>
+                            {(() => {
+                              const diff = Math.round((finalAmountToCollect - ((Number(recvSplitCash) || 0) + (Number(recvSplitGpay) || 0))) * 100) / 100;
+                              return (
+                                <p className={`text-[11px] font-bold ${diff === 0 ? "text-emerald-600" : "text-rose-600"}`}>
+                                  {diff === 0 ? "Split matches the balance" : diff > 0 ? `₹${formatINR(diff)} still short` : `₹${formatINR(-diff)} extra`}
+                                </p>
+                              );
+                            })()}
+                          </div>
+                        )}
                       </div>
 
                       {/* FINAL AMOUNT TO COLLECT */}
@@ -6737,6 +6881,53 @@ export default function POSBilling() {
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* Revenue by payment mode (split bills are divided between Cash and GPay) */}
+                <div
+                  className={`grid grid-cols-1 sm:grid-cols-2 ${
+                    payTotals.other > 0 ? "lg:grid-cols-4" : "lg:grid-cols-3"
+                  } gap-4 mb-8`}
+                >
+                  {[
+                    { key: "cash", label: "Cash", amount: payTotals.cash, bills: payTotals.cashBills, color: "#10B981" },
+                    { key: "gpay", label: "GPay / UPI", amount: payTotals.gpay, bills: payTotals.gpayBills, color: "#3E6F8E" },
+                    ...(payTotals.other > 0
+                      ? [{ key: "other", label: "Card / Other", amount: payTotals.other, bills: payTotals.otherBills, color: "#8B5CF6" }]
+                      : []),
+                  ].map((b) => (
+                    <div key={b.key} className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                      <div className="flex justify-between items-start mb-3">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
+                          {b.label} Received
+                        </span>
+                        <div className="w-6 h-6 rounded-full flex items-center justify-center" style={{ backgroundColor: `${b.color}1A` }}>
+                          <IndianRupee className="w-3 h-3" style={{ color: b.color }} />
+                        </div>
+                      </div>
+                      <div className="text-xl font-black text-[#000000] mb-1">
+                        ₹
+                        {b.amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </div>
+                      <div className="text-[9px] text-[#000000] font-semibold">
+                        {b.bills} bill{b.bills === 1 ? "" : "s"}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                    <div className="flex justify-between items-start mb-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
+                        Split Bills
+                      </span>
+                      <div className="w-6 h-6 rounded-full bg-[#F500A0]/10 flex items-center justify-center">
+                        <IndianRupee className="w-3 h-3 text-[#F500A0]" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-black text-[#000000] mb-1">{payTotals.splitBills}</div>
+                    <div className="text-[9px] text-[#000000] font-semibold">
+                      Amounts already divided into Cash and GPay
+                    </div>
+                  </div>
                 </div>
 
                 {/* Main Charts & Breakdowns */}

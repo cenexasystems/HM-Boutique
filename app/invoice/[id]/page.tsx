@@ -127,7 +127,7 @@ export default async function InvoicePage({
                   ? "A5 portrait"
                   : "A4 portrait"
             };
-            margin: ${paper === "thermal" ? "0mm" : size === "a5" ? "10mm" : "12mm"};
+            margin: ${paper === "thermal" ? "0mm" : "6mm"};
           }
           html, body {
             background: #ffffff !important;
@@ -141,7 +141,12 @@ export default async function InvoicePage({
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
           }
+          body, body * {
+            box-sizing: border-box;
+          }
           body > div {
+            width: 100% !important;
+            max-width: 100% !important;
             display: block !important;
             min-height: 0 !important;
             padding: 0 !important;
@@ -155,7 +160,7 @@ export default async function InvoicePage({
             box-shadow: none !important;
             max-width: ${paper === "thermal" ? (size === "58" ? "58mm" : "80mm") : "100%"} !important;
             width: 100% !important;
-            padding: 0 !important;
+            padding: ${paper === "thermal" ? "0" : "8mm 9mm"} !important;
             margin: 0 auto !important;
           }
         }

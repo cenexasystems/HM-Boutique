@@ -29,7 +29,8 @@ import { BRAND_EN } from "@/lib/brand";
 import { supabase } from "@/lib/supabaseClient";
 import { isUuid } from "@/lib/ids";
 import { toast } from "@/lib/toast";
-import { completeOrder } from "@/lib/completeOrder";
+import { completeOrder, type SettlementPayment } from "@/lib/completeOrder";
+import SettlePaymentModal from "@/app/components/SettlePaymentModal";
 import { calculateOrderTotals } from "@/lib/orderTotals";
 
 export interface OutstandingCreditsProps {
@@ -106,6 +107,7 @@ export default function OutstandingCredits({
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [settlingId, setSettlingId] = useState<string | null>(null);
+  const [pendingSettle, setPendingSettle] = useState<any | null>(null);
   const [savingDueDateId, setSavingDueDateId] = useState<string | null>(null);
   const [localOverrides, setLocalOverrides] = useState<
     Record<string, { status?: string; credit_status?: "outstanding" | "paid"; credit_due_date?: string; credit_paid_at?: string }>
@@ -221,20 +223,19 @@ export default function OutstandingCredits({
   }, [overdueList]);
 
   // Mark as Paid
-  const handleMarkAsPaid = async (order: any) => {
+  const handleMarkAsPaid = (order: any) => setPendingSettle(order);
+
+  const doSettle = async (order: any, payment: SettlementPayment) => {
     const norm = normalizeOrder(order);
     if (!norm) return;
-    const totals = calculateOrderTotals(norm);
-    const invoiceDisplay = norm.invoiceNo || norm.invoice_no || norm.id || order.id;
-    const confirmMsg = `Mark ${formatCurrency(totals.balance || totals.total)} from "${norm.customer_name}" (#${invoiceDisplay}) as fully paid & settled?`;
-    if (!window.confirm(confirmMsg)) return;
+    setPendingSettle(null);
 
     const rowKey = order.id || norm.id;
     setSettlingId(rowKey);
     const nowIso = new Date().toISOString();
 
     try {
-      const updated = await completeOrder(supabase, norm);
+      const updated = await completeOrder(supabase, norm, payment);
       const settledId = updated?.id || norm.id || rowKey;
 
       setLocalOverrides((prev) => ({
@@ -382,8 +383,18 @@ export default function OutstandingCredits({
     },
   ];
 
+  const pendingNorm = pendingSettle ? normalizeOrder(pendingSettle) : null;
+  const pendingBalance = pendingNorm ? calculateOrderTotals(pendingNorm).balance : 0;
+
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
+      <SettlePaymentModal
+        open={Boolean(pendingSettle)}
+        title={`Settle #${pendingNorm?.invoiceNo || pendingNorm?.invoice_no || ""} · ${pendingNorm?.customer_name || ""}`}
+        balance={pendingBalance}
+        onClose={() => setPendingSettle(null)}
+        onConfirm={(pay) => void doSettle(pendingSettle, pay)}
+      />
       {/* ── HEADER ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>

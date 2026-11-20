@@ -5,6 +5,7 @@ import type { OrderTotals } from "@/lib/orderTotals";
 
 export interface InvoiceTotalsBlockProps {
   totals: OrderTotals;
+  couponCode?: string | null;
   className?: string;
 }
 
@@ -16,6 +17,7 @@ const formatINR = (val: number): string =>
 
 export default function InvoiceTotalsBlock({
   totals,
+  couponCode = null,
   className = "",
 }: InvoiceTotalsBlockProps) {
   const manualDiscountLabel =
@@ -24,7 +26,7 @@ export default function InvoiceTotalsBlock({
       : "Manual Discount";
 
   return (
-    <div className={`w-full sm:w-72 space-y-2 text-xs ${className}`}>
+    <div className={`w-full sm:w-72 print:w-64 shrink-0 space-y-2 text-xs ${className}`}>
       {/* Subtotal */}
       <div className="flex justify-between items-center text-zinc-600">
         <span>Subtotal</span>
@@ -46,7 +48,7 @@ export default function InvoiceTotalsBlock({
       {/* Coupon Discount (if > 0) */}
       {totals.couponDiscount > 0 && (
         <div className="flex justify-between items-center text-[#F500A0]">
-          <span className="font-medium">Coupon Discount</span>
+          <span className="font-medium">Coupon Discount{couponCode ? ` (${couponCode})` : ""}</span>
           <span className="font-mono font-medium tabular-nums whitespace-nowrap">
             -₹{formatINR(totals.couponDiscount)}
           </span>
@@ -63,13 +65,25 @@ export default function InvoiceTotalsBlock({
         </div>
       )}
 
-      {/* GST (if > 0) */}
+      {/* GST split-up, or an explicit non-GST note */}
+      {totals.gstAmount <= 0 && (
+        <div className="flex justify-between items-center text-[11px] text-zinc-500">
+          <span>GST</span>
+          <span>Non-GST bill</span>
+        </div>
+      )}
       {totals.gstAmount > 0 && (
         <>
           <div className="flex justify-between items-center text-[11px] text-zinc-500">
             <span>Taxable Amount</span>
             <span className="font-mono tabular-nums whitespace-nowrap">
               ₹{formatINR(totals.taxableAmount)}
+            </span>
+          </div>
+          <div className="flex justify-between items-center text-[11px] text-zinc-500">
+            <span>GST @ {totals.gstPercent}% (included)</span>
+            <span className="font-mono tabular-nums whitespace-nowrap">
+              ₹{formatINR(totals.gstAmount)}
             </span>
           </div>
           <div className="flex justify-between items-center text-[11px] text-zinc-500">

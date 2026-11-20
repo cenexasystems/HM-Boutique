@@ -2,10 +2,18 @@ import { isUuid } from './ids';
 import { STATUS } from './orderStatus';
 import { getOrderTotals } from './orderTotals';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { buildSplitDetails, type SettleMode } from './orderMeta';
+
+export interface SettlementPayment {
+  mode: SettleMode;
+  cash?: number;
+  gpay?: number;
+}
 
 export async function completeOrder(
   supabase: SupabaseClient,
-  row: { id?: string; invoice_no?: string; invoiceNo?: string; total?: number; grand_total?: number; grandTotal?: number; [key: string]: any }
+  row: { id?: string; invoice_no?: string; invoiceNo?: string; total?: number; grand_total?: number; grandTotal?: number; [key: string]: any },
+  payment?: SettlementPayment
 ) {
   let targetId = row?.id;
   const invoiceNo = row?.invoice_no || row?.invoiceNo;
@@ -36,6 +44,20 @@ export async function completeOrder(
   const totals = getOrderTotals(fullRow);
   const orderTotal = totals.grandTotal;
 
+  // How the outstanding balance was paid at settlement (defaults to cash).
+  const balanceNow = totals.balance > 0 ? totals.balance : 0;
+  const mode = payment?.mode || 'CASH';
+  const settleCash = mode === 'CASH' ? balanceNow : mode === 'SPLIT' ? Number(payment?.cash) || 0 : 0;
+  const settleGpay = mode === 'GPAY' ? balanceNow : mode === 'SPLIT' ? Number(payment?.gpay) || 0 : 0;
+  if (mode === 'SPLIT' && Math.abs(settleCash + settleGpay - balanceNow) > 0.009) {
+    throw new Error('Split amounts must add up to the balance due');
+  }
+  const nowIso = new Date().toISOString();
+  const splitDetails = buildSplitDetails({
+    existing: fullRow.split_details,
+    settle: { mode, cash: settleCash, gpay: settleGpay, amount: balanceNow, at: nowIso },
+  });
+
   let officialInvoiceNo = fullRow.invoice_no || fullRow.invoiceNo || invoiceNo;
   if (officialInvoiceNo && String(officialInvoiceNo).toUpperCase().startsWith('DEP-')) {
     officialInvoiceNo = String(officialInvoiceNo).replace(/^DEP-/i, 'INV-');
@@ -55,8 +77,9 @@ export async function completeOrder(
       balance_due: 0,
       amount_paid: orderTotal,
       cash_received: orderTotal,
-      credit_paid_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      credit_paid_at: nowIso,
+      split_details: splitDetails,
+      updated_at: nowIso,
     })
     .eq('id', targetId)
     .select()

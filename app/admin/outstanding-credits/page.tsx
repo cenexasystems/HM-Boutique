@@ -27,7 +27,9 @@ import { formatINR } from "@/lib/money";
 import { normalizeOrder, waLink, formatDDMMYYYY } from "@/lib/normalizeOrder";
 import { isUuid } from "@/lib/ids";
 import { toast } from "@/lib/toast";
-import { completeOrder } from "@/lib/completeOrder";
+import { completeOrder, type SettlementPayment } from "@/lib/completeOrder";
+import CreditDueNotifier from "@/app/components/CreditDueNotifier";
+import SettlePaymentModal from "@/app/components/SettlePaymentModal";
 import { calculateOrderTotals } from "@/lib/orderTotals";
 import { createPortal } from "react-dom";
 
@@ -102,6 +104,7 @@ export default function AdminOutstandingCreditsPage() {
   const [selectedInvoice, setSelectedInvoice] = useState<any | null>(null);
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState<boolean>(false);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [pendingSettle, setPendingSettle] = useState<CreditOrderRecord | null>(null);
   const [printOrder, setPrintOrder] = useState<any | null>(null);
 
   // Fetch live credit orders directly from Supabase
@@ -147,19 +150,20 @@ export default function AdminOutstandingCreditsPage() {
   }, [fetchCreditOrders]);
 
   // Handle Mark as Paid (strictly using real database UUID and try/catch/finally)
-  const handleMarkAsPaid = async (row: CreditOrderRecord) => {
+  const handleMarkAsPaid = (row: CreditOrderRecord) => {
     if (!isUuid(row.id)) {
       toast.error('Internal error: row has no valid UUID');
       return;
     }
-    const totals = calculateOrderTotals(row);
-    const invoiceDisplay = row.invoiceNo || row.invoice_no || row.id;
-    const confirmMsg = `Mark credit invoice #${invoiceDisplay} (₹${formatINR(totals.balance || totals.total)}) as Paid?`;
-    if (!window.confirm(confirmMsg)) return;
+    setPendingSettle(row);
+  };
+
+  const doSettle = async (row: CreditOrderRecord, payment: SettlementPayment) => {
+    setPendingSettle(null);
 
     setSavingId(row.id);
     try {
-      const updated = await completeOrder(supabase, row);
+      const updated = await completeOrder(supabase, row, payment);
 
       // row moves OUTSTANDING -> HISTORY in state without full page reload
       setCreditOrders((prev) =>
@@ -338,6 +342,15 @@ export default function AdminOutstandingCreditsPage() {
 
   return (
     <div className="min-h-screen bg-[#FFF0F8] text-[#111111] font-sans p-4 sm:p-8 print:hidden">
+      <CreditDueNotifier />
+      <SettlePaymentModal
+        open={Boolean(pendingSettle)}
+        title={`Settle #${pendingSettle?.invoiceNo || pendingSettle?.invoice_no || ""} · ${pendingSettle?.customer_name || ""}`}
+        balance={pendingSettle ? calculateOrderTotals(pendingSettle).balance : 0}
+        busy={Boolean(savingId)}
+        onClose={() => setPendingSettle(null)}
+        onConfirm={(pay) => pendingSettle && void doSettle(pendingSettle, pay)}
+      />
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header Bar */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-[#F500A0]/20 shadow-xs">
