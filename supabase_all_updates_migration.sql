@@ -3,16 +3,17 @@
 -- Run once in the Supabase SQL Editor. Safe to re-run (every step is
 -- idempotent: IF NOT EXISTS / CREATE OR REPLACE / guarded backfills).
 --
--- Covers:
+-- Only the database changes made for this round of work (earlier migrations -
+-- expenses, lifecycle, catalogue, performance indexes, measurements tables,
+-- the original mark_credit_order_paid - are NOT repeated here):
 --   1. orders / advance_orders columns used by the billing, credit, advance,
 --      GST-inclusive, discount/coupon, split-payment and due-date features
 --   2. Backfill of old rows so older bills show the same split-up as new ones
 --      (GST %, manual vs coupon discount, due-date columns in sync)
---   3. Credit settlement RPCs (payment method + cash/GPay split + balance)
---   4. Measurements module tables (print / excel / options)
---   5. Indexes for analytics, outstanding credits and due-date reminders
+--   3. settle_credit_order(): credit settlement with payment method + split
+--   4. Indexes for analytics, outstanding credits and due-date reminders
 --
--- NOTE ON WHERE EaXTRA DETAILS LIVE
+-- NOTE ON WHERE EXTRA DETAILS LIVE
 --   The app stores GST %, manual/coupon discount amounts, advance/settlement
 --   payment split and the settlement method inside orders.split_details (jsonb):
 --     { cash, gpay,                         -- split payment at billing
@@ -166,40 +167,10 @@ WHERE is_credit = true
 
 
 -- ----------------------------------------------------------------------------
--- 3. CREDIT SETTLEMENT RPCs
+-- 3. CREDIT SETTLEMENT FUNCTION
 -- ----------------------------------------------------------------------------
 
--- 3a. Original helper (kept for compatibility): marks a credit order as paid.
-CREATE OR REPLACE FUNCTION public.mark_credit_order_paid(p_order_id TEXT)
-RETURNS public.orders
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  v_order public.orders;
-BEGIN
-  SELECT * INTO v_order
-  FROM public.orders
-  WHERE id::text = p_order_id OR invoice_no = p_order_id
-  FOR UPDATE;
-
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Order % not found', p_order_id;
-  END IF;
-
-  UPDATE public.orders
-  SET credit_status = 'paid',
-      credit_paid_at = NOW(),
-      updated_at = NOW()
-  WHERE id = v_order.id
-  RETURNING * INTO v_order;
-
-  RETURN v_order;
-END;
-$$;
-
--- 3b. Full settlement: records HOW the balance was paid (Cash / GPay / Split),
+-- Full settlement: records HOW the balance was paid (Cash / GPay / Split),
 --     validates a split against the balance, and closes the bill in one step.
 CREATE OR REPLACE FUNCTION public.settle_credit_order(
   p_order_id TEXT,
@@ -280,42 +251,11 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.mark_credit_order_paid(TEXT) TO authenticated, anon, public;
 GRANT EXECUTE ON FUNCTION public.settle_credit_order(TEXT, TEXT, NUMERIC, NUMERIC) TO authenticated, anon, public;
 
 
 -- ----------------------------------------------------------------------------
--- 4. MEASUREMENTS MODULE (tailor measurements: list, print, excel, options)
---    Measurements are for the tailor only and are never printed on receipts.
--- ----------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS public.measurement_orders (
-  id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  invoice_no    TEXT NOT NULL,                      -- INV-... or DEP-... of the bill
-  order_kind    TEXT NOT NULL DEFAULT 'INVOICE' CHECK (order_kind IN ('INVOICE', 'ADVANCE')),
-  customer_name TEXT NOT NULL DEFAULT 'Guest',
-  phone         TEXT DEFAULT '',
-  address       TEXT DEFAULT '',
-  status        TEXT NOT NULL DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'COMPLETED', 'CANCELLED')),
-  items         JSONB NOT NULL DEFAULT '[]'::jsonb, -- [{ item_name, price, qty, due_date, front_neck_type, ..., measurements{}, remarks[] }]
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS public.measurement_options (
-  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  kind       TEXT NOT NULL CHECK (kind IN ('neck', 'sleeve_type', 'sleeve_length')),
-  name       TEXT NOT NULL,
-  sort_order INT NOT NULL DEFAULT 1000,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (kind, name)
-);
-
--- databases that already have the table from an earlier run
-ALTER TABLE public.measurement_options ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 1000;
-
-
--- ----------------------------------------------------------------------------
--- 5. INDEXES
+-- 4. INDEXES
 -- ----------------------------------------------------------------------------
 -- Analytics (completed sales by date / mode) and product excel export
 CREATE INDEX IF NOT EXISTS idx_orders_status_created_at ON public.orders(status, created_at DESC);
@@ -329,10 +269,5 @@ CREATE INDEX IF NOT EXISTS idx_orders_due_date          ON public.orders(due_dat
 CREATE INDEX IF NOT EXISTS idx_orders_open_credit
   ON public.orders(credit_due_date)
   WHERE is_credit = true AND status <> 'COMPLETED';
-
--- Measurements tab
-CREATE INDEX IF NOT EXISTS idx_measurement_orders_created_at ON public.measurement_orders(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_measurement_orders_status     ON public.measurement_orders(status);
-CREATE INDEX IF NOT EXISTS idx_measurement_orders_invoice_no ON public.measurement_orders(invoice_no);
 
 -- Done.
