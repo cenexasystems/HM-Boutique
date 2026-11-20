@@ -1,6 +1,6 @@
 "use client";
 
-import { sumPayments } from "@/lib/paymentSplit";
+import { summarizeCashflow, dedupeAdvance } from "@/lib/paymentSplit";
 import CreditDueNotifier from "@/app/components/CreditDueNotifier";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -2416,7 +2416,52 @@ export default function POSBilling() {
       analyticsGstFilter === "all" ||
       (analyticsGstFilter === "gst" ? o.isGst : !o.isGst);
 
-    const analyticsFilteredOrders = orders.filter((o) => {
+    const passesPeriod = (dateStr: string): boolean => {
+    const orderDate = new Date(dateStr);
+    if (analyticsPeriod === "today") {
+      return (
+        orderDate.getDate() === now.getDate() &&
+        orderDate.getMonth() === now.getMonth() &&
+        orderDate.getFullYear() === now.getFullYear()
+      );
+    }
+    if (analyticsPeriod === "week") {
+      const startOfWeek = new Date(now);
+      const dayOfWeek = startOfWeek.getDay();
+      const distToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+      startOfWeek.setDate(startOfWeek.getDate() + distToMonday); // Monday start of week
+      startOfWeek.setHours(0, 0, 0, 0);
+      return orderDate >= startOfWeek;
+    }
+    if (analyticsPeriod === "month") {
+      return (
+        orderDate.getMonth() === now.getMonth() &&
+        orderDate.getFullYear() === now.getFullYear()
+      );
+    }
+    if (analyticsPeriod === "year") {
+      return orderDate.getFullYear() === now.getFullYear();
+    }
+    if (analyticsPeriod === "custom") {
+      const orderTime = orderDate.getTime();
+      const start = analyticsStartDate ? new Date(analyticsStartDate) : null;
+      if (start) start.setHours(0, 0, 0, 0);
+      const end = analyticsEndDate ? new Date(analyticsEndDate) : null;
+      if (end) end.setHours(23, 59, 59, 999);
+
+      if (start && end) {
+        return orderTime >= start.getTime() && orderTime <= end.getTime();
+      } else if (start) {
+        return orderTime >= start.getTime();
+      } else if (end) {
+        return orderTime <= end.getTime();
+      }
+      return true;
+    }
+    return true; // "all"
+    };
+
+    const analyticsFilteredOrders = dedupeAdvance(orders.filter((o) => {
       // Realized revenue and sales volume must only recognize finalized sales
       if (o.is_advance === true && o.status.toUpperCase() !== "COMPLETED") {
         return false;
@@ -2440,49 +2485,8 @@ export default function POSBilling() {
       ) {
         return false;
       }
-      const orderDate = new Date(o.date);
-      if (analyticsPeriod === "today") {
-        return (
-          orderDate.getDate() === now.getDate() &&
-          orderDate.getMonth() === now.getMonth() &&
-          orderDate.getFullYear() === now.getFullYear()
-        );
-      }
-      if (analyticsPeriod === "week") {
-        const startOfWeek = new Date(now);
-        const dayOfWeek = startOfWeek.getDay();
-        const distToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
-        startOfWeek.setDate(startOfWeek.getDate() + distToMonday); // Monday start of week
-        startOfWeek.setHours(0, 0, 0, 0);
-        return orderDate >= startOfWeek;
-      }
-      if (analyticsPeriod === "month") {
-        return (
-          orderDate.getMonth() === now.getMonth() &&
-          orderDate.getFullYear() === now.getFullYear()
-        );
-      }
-      if (analyticsPeriod === "year") {
-        return orderDate.getFullYear() === now.getFullYear();
-      }
-      if (analyticsPeriod === "custom") {
-        const orderTime = orderDate.getTime();
-        const start = analyticsStartDate ? new Date(analyticsStartDate) : null;
-        if (start) start.setHours(0, 0, 0, 0);
-        const end = analyticsEndDate ? new Date(analyticsEndDate) : null;
-        if (end) end.setHours(23, 59, 59, 999);
-
-        if (start && end) {
-          return orderTime >= start.getTime() && orderTime <= end.getTime();
-        } else if (start) {
-          return orderTime >= start.getTime();
-        } else if (end) {
-          return orderTime <= end.getTime();
-        }
-        return true;
-      }
-      return true; // "all"
-    });
+      return passesPeriod(o.date);
+    }), orders);
 
     const totalOrdersCount = analyticsFilteredOrders.length;
     const totalRevenueAmount = analyticsFilteredOrders.reduce(
@@ -2518,8 +2522,37 @@ export default function POSBilling() {
       .filter((o) => o.source === "OFFLINE")
       .reduce((acc, o) => acc + o.grandTotal, 0);
 
-    // Money received per payment mode (split bills divided between Cash and GPay).
-    const payTotals = sumPayments(analyticsFilteredOrders);
+    // Money received per payment mode. Split bills are divided between Cash and GPay, credit
+    // counts once it is paid, and advance deposits count while the advance is still open.
+    const cashflowScope = (o: any) =>
+      passesGst({ isGst: Boolean(o.isGst ?? o.is_gst) } as CompletedOrder) &&
+      (!analyticsSearchPhone || String(o.customerPhone ?? o.customer_phone ?? "").includes(analyticsSearchPhone));
+    const openAdvances = advanceOrders
+      .filter((a: any) => {
+        const st = String(a.status || "").toUpperCase();
+        return st !== "COMPLETED" && st !== "CANCELLED" && String(a.id || "").toUpperCase().startsWith("DEP-");
+      })
+      .map((a: any) => ({
+        ...a,
+        is_advance: true,
+        invoice_no: a.id,
+        isGst: Boolean(a.is_gst),
+        customerPhone: a.customer_phone,
+        amount_paid: a.deposit_amount ?? a.amount_paid,
+        total: a.total_amount ?? a.grand_total ?? a.total,
+      }));
+    const payTotals = summarizeCashflow(
+      dedupeAdvance(
+        [
+          ...orders.filter(
+            (o: any) =>
+              !(String(o.status || "").toUpperCase() !== "COMPLETED" && (o.is_advance === true || o.order_type === "ADVANCE")),
+          ),
+          ...openAdvances,
+        ].filter((o: any) => cashflowScope(o) && passesPeriod(o.date ?? o.created_at)),
+        orders,
+      ),
+    );
 
     // Top items by revenue in analyticsFilteredOrders
     const itemSales: Record<
@@ -2553,6 +2586,13 @@ export default function POSBilling() {
     };
     const currentWeekNumber = getWeekOfYear(now);
 
+    // Trend charts count realized sales only: completed bills (so unpaid credit is excluded until
+    // it is paid) with a completed advance's duplicate row removed.
+    const realizedOrders = dedupeAdvance(
+      orders.filter((o) => String(o.status || "").toUpperCase() === "COMPLETED"),
+      orders,
+    );
+
     // Revenue per day of current week (Mon–Sun) - CONSTANT (independent of analyticsPeriod filters)
     const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     const weekRevenue = [0, 0, 0, 0, 0, 0, 0];
@@ -2571,7 +2611,7 @@ export default function POSBilling() {
     sundayOfThisWeek.setDate(mondayOfThisWeek.getDate() + 6);
     sundayOfThisWeek.setHours(23, 59, 59, 999);
 
-    orders.forEach((order) => {
+    realizedOrders.forEach((order) => {
       if (!passesGst(order)) return;
       if (analyticsSearchPhone) {
         const q = analyticsSearchPhone.toLowerCase();
@@ -2609,7 +2649,7 @@ export default function POSBilling() {
       "Dec",
     ];
     const monthRevenue = Array(12).fill(0);
-    orders.forEach((order) => {
+    realizedOrders.forEach((order) => {
       if (!passesGst(order)) return;
       if (analyticsSearchPhone) {
         const q = analyticsSearchPhone.toLowerCase();
@@ -6848,12 +6888,19 @@ export default function POSBilling() {
                   )}
                 </div>
 
-                {/* Revenue by payment mode (split bills are divided between Cash and GPay) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                {/* Money received by payment mode (split bills divided into Cash and GPay) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
                   {[
-                    { key: "cash", label: "Cash", amount: payTotals.cash, bills: payTotals.cashBills, color: "#10B981" },
-                    { key: "gpay", label: "GPay / UPI", amount: payTotals.gpay, bills: payTotals.gpayBills, color: "#3E6F8E" },
-                    { key: "card", label: "Card", amount: payTotals.card, bills: payTotals.cardBills, color: "#8B5CF6" },
+                    { key: "cash", label: "Cash", amount: payTotals.cash, note: `${payTotals.cashBills} bill${payTotals.cashBills === 1 ? "" : "s"}`, color: "#10B981" },
+                    { key: "gpay", label: "GPay / UPI", amount: payTotals.gpay, note: `${payTotals.gpayBills} bill${payTotals.gpayBills === 1 ? "" : "s"}`, color: "#3E6F8E" },
+                    {
+                      key: "split",
+                      label: "Split",
+                      amount: payTotals.splitAmount,
+                      note: `${payTotals.splitBills} bill${payTotals.splitBills === 1 ? "" : "s"} · Cash ₹${formatINR(payTotals.splitCash)} + GPay ₹${formatINR(payTotals.splitGpay)}`,
+                      color: "#F500A0",
+                    },
+                    { key: "card", label: "Card", amount: payTotals.card, note: `${payTotals.cardBills} bill${payTotals.cardBills === 1 ? "" : "s"}`, color: "#8B5CF6" },
                   ].map((b) => (
                     <div key={b.key} className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                       <div className="flex justify-between items-start mb-3">
@@ -6868,24 +6915,58 @@ export default function POSBilling() {
                         ₹
                         {b.amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </div>
-                      <div className="text-[9px] text-[#000000] font-semibold">
-                        {b.bills} bill{b.bills === 1 ? "" : "s"}
-                      </div>
+                      <div className="text-[9px] text-[#000000] font-semibold">{b.note}</div>
                     </div>
                   ))}
-                  <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                </div>
+                <p className="text-[10px] text-slate-500 font-semibold mb-4 px-1">
+                  Split bills are already included in the Cash and GPay boxes (the Split box shows how much of them came from split payments).
+                </p>
+
+                {/* Credit and Advance orders */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-8">
+                  <div className="bg-white border border-blue-200 rounded-xl p-4 shadow-sm">
                     <div className="flex justify-between items-start mb-3">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Split Bills
-                      </span>
-                      <div className="w-6 h-6 rounded-full bg-[#F500A0]/10 flex items-center justify-center">
-                        <IndianRupee className="w-3 h-3 text-[#F500A0]" />
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700">Credit Sales</span>
+                      <div className="w-6 h-6 rounded-full bg-blue-50 flex items-center justify-center">
+                        <IndianRupee className="w-3 h-3 text-blue-600" />
                       </div>
                     </div>
-                    <div className="text-xl font-black text-[#000000] mb-1">{payTotals.splitBills}</div>
-                    <div className="text-[9px] text-[#000000] font-semibold">
-                      Amounts already divided into Cash and GPay
+                    <div className="text-xl font-black text-rose-600 mb-1">
+                      ₹{payTotals.credit.outstanding.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </div>
+                    <div className="text-[9px] text-[#000000] font-semibold">
+                      Outstanding · {payTotals.credit.outstandingBills} unpaid bill{payTotals.credit.outstandingBills === 1 ? "" : "s"}
+                    </div>
+                    <div className="mt-2 pt-2 border-t border-black/10 flex justify-between text-[10px] font-bold">
+                      <span>Collected ({payTotals.credit.collectedBills})</span>
+                      <span className="text-emerald-600">
+                        ₹{payTotals.credit.collected.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    <div className="text-[9px] text-slate-500 font-semibold mt-1">Collected credit is in Cash / GPay by how it was paid.</div>
+                  </div>
+
+                  <div className="bg-white border border-amber-200 rounded-xl p-4 shadow-sm">
+                    <div className="flex justify-between items-start mb-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700">Advance Orders</span>
+                      <div className="w-6 h-6 rounded-full bg-amber-50 flex items-center justify-center">
+                        <IndianRupee className="w-3 h-3 text-amber-600" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-black text-amber-700 mb-1">
+                      ₹{payTotals.advance.pending.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div className="text-[9px] text-[#000000] font-semibold">
+                      Balance pending · {payTotals.advance.pendingBills} open order{payTotals.advance.pendingBills === 1 ? "" : "s"}
+                    </div>
+                    <div className="mt-2 pt-2 border-t border-black/10 flex justify-between text-[10px] font-bold">
+                      <span>Deposits received ({payTotals.advance.depositBills})</span>
+                      <span className="text-emerald-600">
+                        ₹{payTotals.advance.deposits.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    <div className="text-[9px] text-slate-500 font-semibold mt-1">Deposits are in Cash / GPay; not revenue until the order is completed.</div>
                   </div>
                 </div>
 

@@ -17,7 +17,7 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import { BRAND_EN } from "@/lib/brand";
 import { buildXlsx, type XlsxCell } from "@/lib/xlsx";
-import { sumPayments } from "@/lib/paymentSplit";
+import { summarizeCashflow, dedupeAdvance } from "@/lib/paymentSplit";
 
 export const dynamic = "force-dynamic";
 
@@ -40,6 +40,7 @@ interface SaleRecord {
   credit_status?: string | null;
   balance_due?: number;
   source?: string;
+  [key: string]: any;
 }
 
 export default function AdminAnalyticsPage() {
@@ -61,10 +62,16 @@ export default function AdminAnalyticsPage() {
 
     try {
       // Analytics = status = COMPLETED (and nothing else)
-      const { data: sales, error } = await supabase
+      // Completed sales, plus credit and advance rows so unpaid credit / advance deposits
+      // can be shown. Older databases without these columns fall back to completed-only.
+      let res: any = await supabase
         .from("orders")
         .select("*")
-        .eq("status", "COMPLETED");
+        .or("status.eq.COMPLETED,is_credit.eq.true,is_advance.eq.true,order_type.eq.ADVANCE");
+      if (res.error) {
+        res = await supabase.from("orders").select("*").eq("status", "COMPLETED");
+      }
+      const { data: sales, error } = res;
 
       if (error) {
         console.error("[Analytics] Error loading sales data:", error);
@@ -73,7 +80,7 @@ export default function AdminAnalyticsPage() {
       setSalesData(sales || []);
 
       // Line items for the product-wise Excel export (chunked to keep URLs short)
-      const ids = (sales || []).map((s: any) => s.id);
+      const ids = (sales || []).filter((s: any) => String(s.status || "").toUpperCase() === "COMPLETED").map((s: any) => s.id);
       const all: any[] = [];
       for (let i = 0; i < ids.length; i += 100) {
         const { data: its } = await supabase
@@ -100,10 +107,7 @@ export default function AdminAnalyticsPage() {
   }, [loadSalesData]);
 
   // Filter completed sales by selected period
-  const filteredSales = salesData.filter((sale) => {
-    const statusUpper = (sale.status || "").toUpperCase();
-    if (statusUpper !== "COMPLETED") return false;
-
+  const inPeriod = (sale: SaleRecord) => {
     if (period === "all") return true;
 
     const d = new Date(sale.created_at);
@@ -131,7 +135,13 @@ export default function AdminAnalyticsPage() {
       return d.getFullYear() === now.getFullYear();
     }
     return true;
-  });
+  };
+
+  // A completed advance also has its own final-invoice row: count the sale once.
+  const dedupedData = dedupeAdvance(salesData);
+  const filteredSales = dedupedData.filter(
+    (sale) => (sale.status || "").toUpperCase() === "COMPLETED" && inPeriod(sale),
+  );
 
   // Helper to extract realized revenue from completed sales & advance orders
   const getSaleAmount = (s: SaleRecord) =>
@@ -169,13 +179,13 @@ export default function AdminAnalyticsPage() {
   );
 
   // Cash / GPay / Card received (split bills are divided between the modes)
-  const pay = sumPayments(filteredSales);
+  const pay = summarizeCashflow(dedupedData.filter(inPeriod));
 
   // Monthly revenue trend (current year)
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   const currentYear = new Date().getFullYear();
   const monthlyRevenue = Array(12).fill(0);
-  salesData.forEach((s) => {
+  dedupedData.forEach((s) => {
     if (s.status === "COMPLETED") {
       const d = new Date(s.created_at);
       if (d.getFullYear() === currentYear) {
@@ -260,7 +270,7 @@ export default function AdminAnalyticsPage() {
               {BRAND_EN} — Realized Sales Analytics
             </h1>
             <p className="text-xs text-gray-500 mt-0.5">
-              Strictly finalized completed sales revenue. Uncollected advance deposits and pending orders are excluded.
+              Revenue counts finalized sales only. The payment boxes show money actually received: split bills divided into Cash and GPay, credit once paid, and advance deposits.
             </p>
           </div>
 
@@ -403,39 +413,78 @@ export default function AdminAnalyticsPage() {
           </div>
         </div>
 
-        {/* Revenue by payment mode: Cash / GPay / Card (split bills divided accordingly) */}
+        {/* Money received by payment mode. Split bills are divided into Cash and GPay;
+            credit counts once it is paid; advance deposits count while the order is pending. */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { label: "Cash Received", amount: pay.cash, bills: pay.cashBills, cls: "bg-emerald-50 text-emerald-600" },
-            { label: "GPay / UPI Received", amount: pay.gpay, bills: pay.gpayBills, cls: "bg-blue-50 text-blue-600" },
-            { label: "Card Received", amount: pay.card, bills: pay.cardBills, cls: "bg-violet-50 text-violet-600" },
+            { label: "Cash", amount: pay.cash, note: `${pay.cashBills} bill${pay.cashBills === 1 ? "" : "s"}`, cls: "bg-emerald-50 text-emerald-600" },
+            { label: "GPay / UPI", amount: pay.gpay, note: `${pay.gpayBills} bill${pay.gpayBills === 1 ? "" : "s"}`, cls: "bg-blue-50 text-blue-600" },
+            {
+              label: "Split",
+              amount: pay.splitAmount,
+              note: `${pay.splitBills} bill${pay.splitBills === 1 ? "" : "s"} · Cash ₹${formatINR(pay.splitCash)} + GPay ₹${formatINR(pay.splitGpay)}`,
+              cls: "bg-pink-50 text-[#F500A0]",
+            },
+            { label: "Card", amount: pay.card, note: `${pay.cardBills} bill${pay.cardBills === 1 ? "" : "s"}`, cls: "bg-violet-50 text-violet-600" },
           ].map((b) => (
             <div key={b.label} className="bg-white p-5 rounded-2xl border border-gray-200 shadow-xs flex flex-col justify-between">
               <div className="flex justify-between items-start mb-2">
-                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{b.label}</span>
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{b.label} Received</span>
                 <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${b.cls}`}>
                   <IndianRupee className="w-4 h-4" />
                 </div>
               </div>
               <div>
                 <div className="text-2xl font-black text-gray-950 font-mono tracking-tight">₹{formatINR(b.amount)}</div>
-                <div className="text-[11px] text-gray-400 mt-1 font-medium">
-                  {b.bills} bill{b.bills === 1 ? "" : "s"}
-                </div>
+                <div className="text-[11px] text-gray-400 mt-1 font-medium">{b.note}</div>
               </div>
             </div>
           ))}
-          <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-xs flex flex-col justify-between">
+        </div>
+        <p className="text-[11px] text-gray-400 -mt-2 px-1">
+          Split bills are already included in the Cash and GPay boxes above (the Split box shows how much of them came from split payments).
+        </p>
+
+        {/* Credit and Advance orders */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="bg-white p-5 rounded-2xl border border-blue-200 shadow-xs">
             <div className="flex justify-between items-start mb-2">
-              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Split Bills</span>
-              <div className="w-8 h-8 rounded-xl bg-pink-50 flex items-center justify-center text-[#F500A0]">
+              <span className="text-[10px] font-bold text-blue-700 uppercase tracking-wider">Credit Sales</span>
+              <div className="w-8 h-8 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
                 <IndianRupee className="w-4 h-4" />
               </div>
             </div>
-            <div>
-              <div className="text-2xl font-black text-gray-950 tracking-tight">{pay.splitBills}</div>
-              <div className="text-[11px] text-gray-400 mt-1 font-medium">Divided into Cash and GPay</div>
+            <div className="text-2xl font-black text-rose-600 font-mono tracking-tight">₹{formatINR(pay.credit.outstanding)}</div>
+            <div className="text-[11px] text-gray-500 mt-1 font-medium">
+              Outstanding · {pay.credit.outstandingBills} unpaid bill{pay.credit.outstandingBills === 1 ? "" : "s"}
             </div>
+            <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between text-xs">
+              <span className="text-gray-500 font-medium">
+                Collected ({pay.credit.collectedBills} bill{pay.credit.collectedBills === 1 ? "" : "s"})
+              </span>
+              <span className="font-black text-emerald-600 font-mono">₹{formatINR(pay.credit.collected)}</span>
+            </div>
+            <p className="text-[10px] text-gray-400 mt-1">Collected credit is included in Cash / GPay by how it was paid.</p>
+          </div>
+
+          <div className="bg-white p-5 rounded-2xl border border-amber-200 shadow-xs">
+            <div className="flex justify-between items-start mb-2">
+              <span className="text-[10px] font-bold text-amber-700 uppercase tracking-wider">Advance Orders</span>
+              <div className="w-8 h-8 rounded-xl bg-amber-50 flex items-center justify-center text-amber-600">
+                <IndianRupee className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="text-2xl font-black text-amber-700 font-mono tracking-tight">₹{formatINR(pay.advance.pending)}</div>
+            <div className="text-[11px] text-gray-500 mt-1 font-medium">
+              Balance pending · {pay.advance.pendingBills} open order{pay.advance.pendingBills === 1 ? "" : "s"}
+            </div>
+            <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between text-xs">
+              <span className="text-gray-500 font-medium">
+                Deposits received ({pay.advance.depositBills} order{pay.advance.depositBills === 1 ? "" : "s"})
+              </span>
+              <span className="font-black text-emerald-600 font-mono">₹{formatINR(pay.advance.deposits)}</span>
+            </div>
+            <p className="text-[10px] text-gray-400 mt-1">Deposits are in Cash / GPay above; not counted as revenue until the order is completed.</p>
           </div>
         </div>
 
