@@ -1,5 +1,6 @@
 "use client";
 
+import { sumPayments } from "@/lib/paymentSplit";
 import CreditDueNotifier from "@/app/components/CreditDueNotifier";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -2517,44 +2518,8 @@ export default function POSBilling() {
       .filter((o) => o.source === "OFFLINE")
       .reduce((acc, o) => acc + o.grandTotal, 0);
 
-    // Money received per payment mode. A split bill adds its cash part to Cash and its
-    // GPay part to GPay; a settled credit / completed advance uses the settlement (+ deposit) split.
-    const payTotals = { cash: 0, gpay: 0, other: 0, cashBills: 0, gpayBills: 0, otherBills: 0, splitBills: 0 };
-    analyticsFilteredOrders.forEach((o) => {
-      const total = Number(o.grandTotal) || 0;
-      const sc = Number(o.splitCash) || 0;
-      const sg = Number(o.splitGpay) || 0;
-      const stc = Number(o.settle_cash) || 0;
-      const stg = Number(o.settle_gpay) || 0;
-      let cash = 0;
-      let gpay = 0;
-      let other = 0;
-      const modeRaw = String(
-        (o as any).payment_mode || (o as any).payment_method || o.paymentMode || "CASH",
-      ).toUpperCase();
-      if (sc + sg > 0) {
-        cash = sc;
-        gpay = sg;
-      } else if (stc + stg > 0) {
-        cash = stc + (Number(o.advance_cash) || 0);
-        gpay = stg + (Number(o.advance_gpay) || 0);
-      }
-      const known = cash + gpay;
-      if (known < total - 0.009) {
-        // remainder (or the whole bill when no split info) goes by the bill's payment mode
-        const rest = Math.round((total - known) * 100) / 100;
-        if (modeRaw === "GPAY" || modeRaw === "UPI") gpay += rest;
-        else if (modeRaw === "CARD") other += rest;
-        else cash += rest;
-      }
-      payTotals.cash += cash;
-      payTotals.gpay += gpay;
-      payTotals.other += other;
-      if (cash > 0) payTotals.cashBills++;
-      if (gpay > 0) payTotals.gpayBills++;
-      if (other > 0) payTotals.otherBills++;
-      if (cash > 0 && gpay > 0) payTotals.splitBills++;
-    });
+    // Money received per payment mode (split bills divided between Cash and GPay).
+    const payTotals = sumPayments(analyticsFilteredOrders);
 
     // Top items by revenue in analyticsFilteredOrders
     const itemSales: Record<
@@ -6884,17 +6849,11 @@ export default function POSBilling() {
                 </div>
 
                 {/* Revenue by payment mode (split bills are divided between Cash and GPay) */}
-                <div
-                  className={`grid grid-cols-1 sm:grid-cols-2 ${
-                    payTotals.other > 0 ? "lg:grid-cols-4" : "lg:grid-cols-3"
-                  } gap-4 mb-8`}
-                >
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
                   {[
                     { key: "cash", label: "Cash", amount: payTotals.cash, bills: payTotals.cashBills, color: "#10B981" },
                     { key: "gpay", label: "GPay / UPI", amount: payTotals.gpay, bills: payTotals.gpayBills, color: "#3E6F8E" },
-                    ...(payTotals.other > 0
-                      ? [{ key: "other", label: "Card / Other", amount: payTotals.other, bills: payTotals.otherBills, color: "#8B5CF6" }]
-                      : []),
+                    { key: "card", label: "Card", amount: payTotals.card, bills: payTotals.cardBills, color: "#8B5CF6" },
                   ].map((b) => (
                     <div key={b.key} className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                       <div className="flex justify-between items-start mb-3">

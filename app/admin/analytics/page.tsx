@@ -17,6 +17,7 @@ import {
 import { supabase } from "@/lib/supabaseClient";
 import { BRAND_EN } from "@/lib/brand";
 import { buildXlsx, type XlsxCell } from "@/lib/xlsx";
+import { sumPayments } from "@/lib/paymentSplit";
 
 export const dynamic = "force-dynamic";
 
@@ -166,6 +167,9 @@ export default function AdminAnalyticsPage() {
     (sum, s) => sum + getSaleAmount(s),
     0
   );
+
+  // Cash / GPay / Card received (split bills are divided between the modes)
+  const pay = sumPayments(filteredSales);
 
   // Monthly revenue trend (current year)
   const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -395,6 +399,42 @@ export default function AdminAnalyticsPage() {
               <div className="text-[11px] text-gray-400 mt-1 font-medium">
                 Per realized customer transaction
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Revenue by payment mode: Cash / GPay / Card (split bills divided accordingly) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { label: "Cash Received", amount: pay.cash, bills: pay.cashBills, cls: "bg-emerald-50 text-emerald-600" },
+            { label: "GPay / UPI Received", amount: pay.gpay, bills: pay.gpayBills, cls: "bg-blue-50 text-blue-600" },
+            { label: "Card Received", amount: pay.card, bills: pay.cardBills, cls: "bg-violet-50 text-violet-600" },
+          ].map((b) => (
+            <div key={b.label} className="bg-white p-5 rounded-2xl border border-gray-200 shadow-xs flex flex-col justify-between">
+              <div className="flex justify-between items-start mb-2">
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">{b.label}</span>
+                <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${b.cls}`}>
+                  <IndianRupee className="w-4 h-4" />
+                </div>
+              </div>
+              <div>
+                <div className="text-2xl font-black text-gray-950 font-mono tracking-tight">₹{formatINR(b.amount)}</div>
+                <div className="text-[11px] text-gray-400 mt-1 font-medium">
+                  {b.bills} bill{b.bills === 1 ? "" : "s"}
+                </div>
+              </div>
+            </div>
+          ))}
+          <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-xs flex flex-col justify-between">
+            <div className="flex justify-between items-start mb-2">
+              <span className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Split Bills</span>
+              <div className="w-8 h-8 rounded-xl bg-pink-50 flex items-center justify-center text-[#F500A0]">
+                <IndianRupee className="w-4 h-4" />
+              </div>
+            </div>
+            <div>
+              <div className="text-2xl font-black text-gray-950 tracking-tight">{pay.splitBills}</div>
+              <div className="text-[11px] text-gray-400 mt-1 font-medium">Divided into Cash and GPay</div>
             </div>
           </div>
         </div>
