@@ -1,6 +1,8 @@
 "use client";
 
 import { summarizeCashflow, dedupeAdvance } from "@/lib/paymentSplit";
+import { buildPaymentRows } from "@/lib/paymentRows";
+import { buildXlsx, type XlsxCell } from "@/lib/xlsx";
 import CreditDueNotifier from "@/app/components/CreditDueNotifier";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -879,6 +881,12 @@ export default function POSBilling() {
     isGst?: boolean;
     gstPercentage?: number;
     gstAmount?: number;
+    paymentMode?: string;
+    splitCash?: number;
+    splitGpay?: number;
+    manualDiscount?: number;
+    couponDiscount?: number;
+    couponCode?: string | null;
     items?: any[];
   } | null>(null);
 
@@ -905,6 +913,13 @@ export default function POSBilling() {
           is_gst: advanceReceipt.isGst,
           gst_percentage: advanceReceipt.gstPercentage,
           gst_amount: advanceReceipt.gstAmount,
+          payment_mode: advanceReceipt.paymentMode || "CASH",
+          deposit_payment_mode: advanceReceipt.paymentMode || "CASH",
+          split_cash: advanceReceipt.splitCash || 0,
+          split_gpay: advanceReceipt.splitGpay || 0,
+          manualDiscount: advanceReceipt.manualDiscount,
+          couponDiscount: advanceReceipt.couponDiscount,
+          coupon_code: advanceReceipt.couponCode,
         });
       }
       if (selectedAdvance && (selectedAdvance.id === printModalData.id || selectedAdvance.id === cleanId)) {
@@ -1531,6 +1546,12 @@ export default function POSBilling() {
         isGst: receiptIsGst,
         gstPercentage: receiptGstPercentage,
         gstAmount: receiptGstAmount,
+        paymentMode: advDepositPaymentMode,
+        splitCash: advDepositPaymentMode === "SPLIT" ? Number(advSplitCash) || 0 : 0,
+        splitGpay: advDepositPaymentMode === "SPLIT" ? Number(advSplitGpay) || 0 : 0,
+        manualDiscount,
+        couponDiscount,
+        couponCode: appliedCoupon?.code || null,
         items: receiptItems,
       });
     } catch (err) {
@@ -2354,6 +2375,53 @@ export default function POSBilling() {
     expenseSortOrder,
   ]);
 
+  // Download the expenses currently shown (period + category + search + sort) as .xlsx.
+  const exportExpensesExcel = () => {
+    const list = expenseStats.filtered;
+    if (list.length === 0) {
+      alert("No expenses to export for the selected filters.");
+      return;
+    }
+    const fmt = (d: string) =>
+      d ? new Date(d).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "";
+    const rows: XlsxCell[][] = list.map((e, i) => [
+      i + 1,
+      fmt(e.expense_date),
+      e.title,
+      e.category,
+      e.payment_mode,
+      Number(e.amount) || 0,
+      e.notes || "",
+    ]);
+    rows.push(["", "", "TOTAL", "", "", Math.round(expenseStats.total * 100) / 100, ""]);
+    rows.push([]);
+    rows.push(["", "", "Category summary", "", "", "", ""]);
+    expenseStats.categoryBreakdown.forEach((c) =>
+      rows.push(["", "", c.category, "", "", Math.round(c.amount * 100) / 100, ""]),
+    );
+    const modeTotals: Record<string, number> = {};
+    list.forEach((e) => {
+      const m = String(e.payment_mode || "OTHER").toUpperCase();
+      modeTotals[m] = (modeTotals[m] || 0) + (Number(e.amount) || 0);
+    });
+    rows.push([]);
+    rows.push(["", "", "Payment mode summary", "", "", "", ""]);
+    Object.entries(modeTotals).forEach(([m, amt]) => rows.push(["", "", m, "", "", Math.round(amt * 100) / 100, ""]));
+
+    const blob = buildXlsx({
+      sheetName: "Expenses",
+      headers: ["#", "Date", "Title", "Category", "Payment Mode", "Amount (₹)", "Notes"],
+      rows,
+      widths: [6, 14, 30, 18, 14, 14, 40],
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `expenses-${expensePeriod}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   // Total expenses within the CURRENT analytics window (drives Net Profit on the dashboard)
   const analyticsExpensesTotal = React.useMemo(() => {
     return expenses
@@ -2989,7 +3057,10 @@ export default function POSBilling() {
   }
 
   // Filtered orders for Order History tab
-  const historyFilteredOrders = orders.filter((order) => {
+  // Order History lists a sale once: a completed advance order has both its original advance
+  // row and its final invoice row (same number) - keep only the final invoice. Unpaid credit
+  // and open advances never appear here; they arrive after full payment.
+  const historyFilteredOrders = dedupeAdvance(orders, orders).filter((order) => {
     // Strictly isolate advance orders: exclude active/incomplete advance orders
     if (order.is_advance === true && String(order.status || "").toUpperCase() !== "COMPLETED") {
       return false;
@@ -3554,6 +3625,29 @@ export default function POSBilling() {
                 </span>
               )}
             </button>
+            {role === "admin" && (
+              <button
+                onClick={() => {
+                  setActiveTab("outstanding_credits");
+                  setCompletedBillData(null);
+                  if (mainScrollRef.current) mainScrollRef.current.scrollTop = 0;
+                  window.scrollTo({ top: 0, behavior: "instant" });
+                }}
+                className={`w-full flex items-center gap-3.5 px-3.5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-colors cursor-pointer relative ${
+                  activeTab === "outstanding_credits"
+                    ? "bg-white text-[#27272A] shadow-md"
+                    : "text-white/90 hover:bg-white/20 hover:text-white"
+                }`}
+              >
+                <CreditCard className="w-5 h-5 shrink-0" />
+                Outstanding Credits
+                {orders.filter((o: any) => (o.is_credit || o.payment_mode === "CREDIT" || o.credit_status) && o.credit_status !== "paid").length > 0 && (
+                  <span className="ml-auto min-w-[22px] h-[22px] px-1.5 rounded-full text-[10px] font-black flex items-center justify-center bg-white text-[#F500A0] shadow-xs">
+                    {orders.filter((o: any) => (o.is_credit || o.payment_mode === "CREDIT" || o.credit_status) && o.credit_status !== "paid").length}
+                  </span>
+                )}
+              </button>
+            )}
             <button
               onClick={() => {
                 setActiveTab("orders");
@@ -3690,29 +3784,6 @@ export default function POSBilling() {
                 Expense Tracker
               </button>
             )}
-            {role === "admin" && (
-              <button
-                onClick={() => {
-                  setActiveTab("outstanding_credits");
-                  setCompletedBillData(null);
-                  if (mainScrollRef.current) mainScrollRef.current.scrollTop = 0;
-                  window.scrollTo({ top: 0, behavior: "instant" });
-                }}
-                className={`w-full flex items-center gap-3.5 px-3.5 py-3 rounded-xl font-bold text-xs uppercase tracking-wider transition-colors cursor-pointer relative ${
-                  activeTab === "outstanding_credits"
-                    ? "bg-white text-[#27272A] shadow-md"
-                    : "text-white/90 hover:bg-white/20 hover:text-white"
-                }`}
-              >
-                <CreditCard className="w-5 h-5 shrink-0" />
-                Outstanding Credits
-                {orders.filter((o: any) => (o.is_credit || o.payment_mode === "CREDIT" || o.credit_status) && o.credit_status !== "paid").length > 0 && (
-                  <span className="ml-auto min-w-[22px] h-[22px] px-1.5 rounded-full text-[10px] font-black flex items-center justify-center bg-white text-[#F500A0] shadow-xs">
-                    {orders.filter((o: any) => (o.is_credit || o.payment_mode === "CREDIT" || o.credit_status) && o.credit_status !== "paid").length}
-                  </span>
-                )}
-              </button>
-            )}
           </nav>
 
           {/* Bottom Footer Section (Logout + Staff Badge) - Pinned to Bottom */}
@@ -3803,7 +3874,7 @@ export default function POSBilling() {
                     </span>
                   </div>
                   <p className="text-[11px] font-mono font-bold text-[#F500A0] mt-0.5">
-                    #{completedBillData.id}
+                    #{(completedBillData as any).invoice_no || (completedBillData as any).invoiceNo || completedBillData.id}
                   </p>
                 </div>
                 <button
@@ -3820,11 +3891,13 @@ export default function POSBilling() {
                 <div className="text-[10px] font-extrabold text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-2 flex justify-between items-center">
                   <span>Payment Receipt</span>
                   <span className="text-[9px] font-black text-[#F500A0] bg-black/5 px-2 py-0.5 rounded">
-                    {completedBillData.paymentMode === "SPLIT"
-                      ? "Split · Cash + GPay"
-                      : completedBillData.paymentMode === "GPAY"
-                        ? "GPay"
-                        : "Cash"}
+                    {completedBillData.paymentMode === "CREDIT"
+                      ? "Credit · Unpaid"
+                      : completedBillData.paymentMode === "SPLIT"
+                        ? "Split · Cash + GPay"
+                        : completedBillData.paymentMode === "GPAY"
+                          ? "GPay"
+                          : "Cash"}
                   </span>
                 </div>
 
@@ -3884,7 +3957,9 @@ export default function POSBilling() {
 
                 <div className="flex justify-between items-center text-xs">
                   <span className="font-semibold text-gray-600">
-                    {completedBillData.paymentMode === "GPAY"
+                    {completedBillData.paymentMode === "CREDIT"
+                      ? "Paid Now"
+                      : completedBillData.paymentMode === "GPAY"
                       ? "Paid via GPay"
                       : completedBillData.paymentMode === "SPLIT"
                         ? "Total Received"
@@ -3895,15 +3970,35 @@ export default function POSBilling() {
                   <span className="text-sm font-black text-black">
                     ₹
                     {(
-                      (completedBillData as any).actualAmountReceived ??
-                      completedBillData.cashReceived ??
-                      completedBillData.grandTotal
+                      completedBillData.paymentMode === "CREDIT"
+                        ? 0
+                        : (completedBillData as any).actualAmountReceived ??
+                          completedBillData.cashReceived ??
+                          completedBillData.grandTotal
                     ).toLocaleString(undefined, { minimumFractionDigits: 2 })}
                   </span>
                 </div>
 
+                {/* Credit sale: nothing received yet - show what is still owed */}
+                {completedBillData.paymentMode === "CREDIT" && (
+                  <div className="bg-amber-50 border border-amber-300 rounded-lg p-3 sm:p-3.5 flex justify-between items-center mt-1">
+                    <span className="text-xs font-bold text-amber-900">Balance Due (on credit)</span>
+                    <span className="text-base sm:text-lg font-black text-amber-900">
+                      ₹{Number(completedBillData.grandTotal || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                )}
+                {completedBillData.paymentMode === "CREDIT" && ((completedBillData as any).credit_due_date || (completedBillData as any).due_date) && (
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="font-semibold text-gray-600">Payment Due Date</span>
+                    <span className="font-black text-black">
+                      {new Date(String((completedBillData as any).credit_due_date || (completedBillData as any).due_date)).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })}
+                    </span>
+                  </div>
+                )}
+
                 {/* Change Returned Box — cash change only */}
-                {completedBillData.paymentMode !== "GPAY" && (
+                {completedBillData.paymentMode !== "GPAY" && completedBillData.paymentMode !== "CREDIT" && (
                   <div className="bg-[#F4F4F5] border border-[#E4E4E7] rounded-lg p-3 sm:p-3.5 flex justify-between items-center mt-1">
                     <span className="text-xs font-bold text-[#7C5A52]">
                       Change Returned
@@ -7510,6 +7605,14 @@ export default function POSBilling() {
                   to show your real Net Profit on the dashboard.
                 </p>
               </div>
+              <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={exportExpensesExcel}
+                disabled={expenseStats.count === 0}
+                className="text-[10px] font-black uppercase tracking-wider border-2 border-[#F500A0] text-[#F500A0] bg-white hover:bg-[#F500A0]/5 disabled:opacity-40 px-4 py-2 rounded-xl flex items-center gap-2 cursor-pointer"
+              >
+                <Download className="w-4 h-4" /> Export Excel
+              </button>
               {/* Period filter */}
               <div className="flex flex-wrap items-center gap-1.5 bg-[#FAFAFA] border border-black/10 rounded-xl p-1">
                 {(
@@ -7534,6 +7637,7 @@ export default function POSBilling() {
                     {label}
                   </button>
                 ))}
+              </div>
               </div>
             </div>
 
@@ -8652,6 +8756,25 @@ export default function POSBilling() {
                     <span className="text-[#F500A0] font-black">
                       ₹{selectedOrder.grandTotal.toLocaleString()}
                     </span>
+                  </div>
+
+                  {/* Payment split-up: method, cash/GPay split, advance / credit settlement, balance */}
+                  <div className="mt-4 pt-3 border-t border-black/10 space-y-1.5">
+                    <div className="text-[10px] font-black uppercase tracking-widest text-gray-500 mb-1">
+                      Payment Details
+                    </div>
+                    {buildPaymentRows(selectedOrder).map((r, i) => (
+                      <div key={i} className="flex justify-between text-sm gap-3">
+                        <span className="text-[#000000] font-semibold whitespace-pre">{r.label}</span>
+                        <span
+                          className={`${r.strong ? "font-black" : "font-bold"} ${
+                            r.tone === "good" ? "text-emerald-600" : r.tone === "bad" ? "text-rose-600" : "text-[#000000]"
+                          }`}
+                        >
+                          {r.value}
+                        </span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               </div>

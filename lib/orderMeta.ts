@@ -131,3 +131,18 @@ export function metaToOrderFields(row: any) {
   }
   return { fields: out, gstPercentage: m.gstPercentage };
 }
+
+/**
+ * Best guess of the GST % for old bills that never stored it. GST is inclusive, so the
+ * taxable value is total - delivery - gst, and the rate is gst / taxable. The result is
+ * snapped to the common slabs (3, 5, 12, 18, 28) when it is within 0.6 of one.
+ */
+export function estimateGstPercent(gstAmount: number, total: number, row?: any): number {
+  const gst = Number(gstAmount) || 0;
+  const delivery = Number(row?.delivery_charge ?? row?.delivery_fee ?? row?.deliveryFee ?? 0) || 0;
+  const taxable = (Number(total) || 0) - delivery - gst;
+  if (gst <= 0 || taxable <= 0) return 0;
+  const pct = (gst / taxable) * 100;
+  const slab = [3, 5, 12, 18, 28].find((x) => Math.abs(x - pct) <= 0.6);
+  return slab ?? Math.round(pct);
+}

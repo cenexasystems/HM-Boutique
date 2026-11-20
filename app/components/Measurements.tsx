@@ -186,39 +186,94 @@ export default function Measurements({
     if (list.length === 0) return;
     const esc = (s: unknown) =>
       String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
-    const body = list
-      .map((r) => {
-        const items = r.items
-          .map((it, idx) => {
-            const filled = MEASUREMENT_FIELDS.filter((f) => it.measurements?.[f.key]);
-            return `<div class="item">
-              <div class="row"><b>${esc(it.item_name || `Item ${idx + 1}`)}</b><span>${it.qty > 1 ? `${esc(it.qty)} × ` : ""}₹${Number(it.price || 0).toLocaleString("en-IN")}${it.due_date ? ` · Due ${esc(fmtDate(it.due_date))}` : ""}</span></div>
-              <div class="meta">Front Neck: <b>${esc(it.front_neck_type || "-")}</b> · Back Neck: <b>${esc(it.back_neck_type || "-")}</b> · Sleeve: <b>${esc(it.sleeve_type || "-")}</b> · Sleeve Length: <b>${esc(it.sleeve_length || "-")}</b></div>
-              ${filled.length ? `<table><tr>${filled.map((f) => `<th>${esc(f.label)}</th>`).join("")}</tr><tr>${filled.map((f) => `<td>${esc(it.measurements[f.key])} cm</td>`).join("")}</tr></table>` : ""}
-              ${it.remarks?.length ? `<ol class="rem">${it.remarks.map((m) => `<li>${esc(m)}</li>`).join("")}</ol>` : ""}
-            </div>`;
-          })
-          .join("");
-        return `<section>
-          <h2>${esc(r.customer_name || "Guest")} <small>${esc(r.invoice_no)}</small></h2>
-          <div class="meta">${r.phone ? `Phone: ${esc(r.phone)} · ` : ""}Date: ${esc(fmtDate(r.created_at))} · Status: ${esc(STATUS_STYLE[r.status].label)}${r.address ? ` · Address: ${esc(r.address)}` : ""}</div>
-          ${items}
-        </section>`;
-      })
-      .join("");
+    // One A4 page per billed item: header, big measurement boxes, remarks and a notes area
+    // that stretches to fill the rest of the page.
+    const pages: string[] = [];
+    list.forEach((r) => {
+      const total = r.items.length;
+      r.items.forEach((it, idx) => {
+        const filled = MEASUREMENT_FIELDS.filter((f) => it.measurements?.[f.key]);
+        const info = [
+          ["Front Neck", it.front_neck_type],
+          ["Back Neck", it.back_neck_type],
+          ["Sleeve Type", it.sleeve_type],
+          ["Sleeve Length", it.sleeve_length],
+        ];
+        pages.push(`<section class="page">
+          <header>
+            <div class="top">
+              <div>
+                <div class="cust">${esc(r.customer_name || "Guest")}</div>
+                <div class="sub">${r.phone ? `Phone: ${esc(r.phone)}` : ""}${r.address ? ` &nbsp;·&nbsp; ${esc(r.address)}` : ""}</div>
+              </div>
+              <div class="inv">
+                <div class="no">${esc(r.invoice_no)}</div>
+                <div class="sub">Date: ${esc(fmtDate(r.created_at))}</div>
+                <div class="sub">Status: ${esc(STATUS_STYLE[r.status].label)}</div>
+              </div>
+            </div>
+          </header>
+
+          <div class="item">
+            <div class="row">
+              <div class="name">${esc(it.item_name || `Item ${idx + 1}`)}<span class="cnt">${total > 1 ? ` (item ${idx + 1} of ${total})` : ""}</span></div>
+              <div class="price">${it.qty > 1 ? `${esc(it.qty)} × ` : ""}₹${Number(it.price || 0).toLocaleString("en-IN")}${it.due_date ? `<br><span class="due">Due: ${esc(fmtDate(it.due_date))}</span>` : ""}</div>
+            </div>
+            <div class="info">${info.map(([l, v]) => `<div class="cell"><span>${l}</span><b>${esc(v || "-")}</b></div>`).join("")}</div>
+          </div>
+
+          <div class="h">Measurements</div>
+          ${
+            filled.length
+              ? `<div class="grid">${filled.map((f) => `<div class="m"><span>${esc(f.label)}</span><b>${esc(it.measurements[f.key])}<i> cm</i></b></div>`).join("")}</div>`
+              : `<div class="none">No measurements recorded</div>`
+          }
+
+          <div class="h">Remarks</div>
+          <div class="remarks">${
+            it.remarks?.length ? `<ol>${it.remarks.map((m) => `<li>${esc(m)}</li>`).join("")}</ol>` : ""
+          }</div>
+
+          <div class="h">Tailor Notes</div>
+          <div class="notes"></div>
+        </section>`);
+      });
+    });
+    const body = pages.join("");
     const w = window.open("", "_blank", "width=900,height=700");
     if (!w) {
       toast.error("Allow pop-ups to print");
       return;
     }
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Measurements</title><style>
-      body{font-family:Arial,sans-serif;color:#000;margin:16px;font-size:12px}
-      section{page-break-after:always;margin-bottom:24px}section:last-child{page-break-after:auto}
-      h2{margin:0 0 4px;font-size:18px}h2 small{font-size:12px;color:#F500A0;margin-left:8px}
-      .meta{color:#444;margin:4px 0 8px}.item{border:1px solid #ccc;border-radius:6px;padding:10px;margin:8px 0;break-inside:avoid}
-      .row{display:flex;justify-content:space-between;font-size:13px}
-      table{border-collapse:collapse;margin-top:6px;width:100%}th,td{border:1px solid #bbb;padding:4px 6px;text-align:center;font-size:11px}th{background:#f5f5f5}
-      .rem{margin:6px 0 0 18px;padding:0}
+      @page { size: A4 portrait; margin: 10mm; }
+      *{box-sizing:border-box}
+      html,body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .page{display:flex;flex-direction:column;min-height:274mm;page-break-after:always;padding:2mm 1mm}
+      .page:last-child{page-break-after:auto}
+      header{border-bottom:3px solid #F500A0;padding-bottom:5mm;margin-bottom:6mm}
+      .top{display:flex;justify-content:space-between;align-items:flex-start;gap:8mm}
+      .cust{font-size:28px;font-weight:800;line-height:1.1}
+      .inv{text-align:right}.inv .no{font-size:20px;font-weight:800;color:#F500A0;font-family:"Courier New",monospace}
+      .sub{font-size:14px;color:#333;margin-top:2mm}
+      .item{border:2px solid #222;border-radius:3mm;padding:5mm;margin-bottom:6mm}
+      .row{display:flex;justify-content:space-between;align-items:flex-start;gap:6mm}
+      .name{font-size:24px;font-weight:800}.cnt{font-size:14px;font-weight:600;color:#555}
+      .price{text-align:right;font-size:20px;font-weight:700}.due{font-size:14px;font-weight:600;color:#B45309}
+      .info{display:grid;grid-template-columns:repeat(4,1fr);gap:4mm;margin-top:5mm}
+      .cell{border:1px solid #bbb;border-radius:2mm;padding:3mm}
+      .cell span{display:block;font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.05em}
+      .cell b{display:block;font-size:17px;margin-top:1mm}
+      .h{font-size:13px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#F500A0;margin:2mm 0 3mm}
+      .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4mm;margin-bottom:6mm}
+      .m{border:2px solid #222;border-radius:3mm;padding:4mm 5mm;min-height:24mm;display:flex;flex-direction:column;justify-content:space-between}
+      .m span{font-size:13px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.04em}
+      .m b{font-size:30px;font-weight:800;line-height:1.1}.m i{font-size:15px;font-style:normal;font-weight:600;color:#444}
+      .none{font-size:15px;color:#777;margin-bottom:6mm}
+      .remarks{border:1px solid #bbb;border-radius:2mm;padding:4mm 6mm;min-height:22mm;font-size:16px;margin-bottom:6mm}
+      .remarks ol{margin:0;padding-left:6mm}.remarks li{margin-bottom:1.5mm}
+      .notes{flex:1;min-height:30mm;border:1px solid #bbb;border-radius:2mm;
+        background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 9mm,#ddd 9mm,#ddd 9.3mm)}
     </style></head><body>${body}</body></html>`);
     w.document.close();
     w.focus();

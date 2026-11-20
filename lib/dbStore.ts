@@ -1,4 +1,4 @@
-import { metaToOrderFields, buildSplitDetails } from './orderMeta';
+import { metaToOrderFields, buildSplitDetails, estimateGstPercent } from './orderMeta';
 import { sql } from './db';
 import { BROCHURE_CATALOGUE_ITEMS, OFFICIAL_COURSE_CATEGORIES, catalogItemToProduct } from './courses';
 import { isSupabaseConfigured, supabase } from './supabase';
@@ -747,7 +747,7 @@ export const dbStore = {
             const gstPercentage = Number(
               o.gst_percentage ||
               o.gst_rate ||
-              (gstAmount > 0 && subtotal > 0 ? Math.round((gstAmount / subtotal) * 100) : (isGst ? 18 : 0))
+              (gstAmount > 0 && subtotal > 0 ? estimateGstPercent(gstAmount, total, o) : (isGst ? 18 : 0))
             );
 
             return {
@@ -996,7 +996,7 @@ export const dbStore = {
           const gstPercentage = Number(
             row.gst_percentage ||
             row.gst_rate ||
-            (gstAmount > 0 && subtotal > 0 ? Math.round((gstAmount / subtotal) * 100) : (isGst ? 18 : 0))
+            (gstAmount > 0 && subtotal > 0 ? estimateGstPercent(gstAmount, total, row) : (isGst ? 18 : 0))
           );
 
           return {
@@ -1707,7 +1707,7 @@ export const dbStore = {
               metaToOrderFields(matchedOrd).gstPercentage ||
               matchedOrd?.gst_percentage ||
               matchedOrd?.gst_rate ||
-              (gstAmount > 0 && subtotal > 0 ? Math.round((gstAmount / subtotal) * 100) : (isGst ? 18 : 0))
+              (gstAmount > 0 && subtotal > 0 ? estimateGstPercent(gstAmount, totalAmt, matchedOrd) : (isGst ? 18 : 0))
             );
             const discountAmount = Number(matchedOrd?.discount_amount ?? matchedOrd?.manual_discount_amount ?? 0);
             const discountValue = Number(matchedOrd?.manual_discount_value || matchedOrd?.discount_value || 0);
@@ -1728,6 +1728,7 @@ export const dbStore = {
               grand_total: totalAmt,
               deposit_amount: depAmt,
               deposit_payment_mode: (String(matchedOrd?.payment_mode || 'CASH').toUpperCase()) as PaymentMode,
+              ...({ payment_mode: String(matchedOrd?.payment_mode || 'CASH').toUpperCase() } as Record<string, any>),
               delivery_date: a.expected_delivery_date || a.delivery_date || matchedOrd?.delivery_date || null,
               notes: a.remarks || a.notes || a.description || matchedOrd?.notes || null,
               finalized_order_id: matchedOrd?.reference_number || a.invoice_number || a.completed_order_id || null,
@@ -1796,7 +1797,7 @@ export const dbStore = {
           metaToOrderFields(o).gstPercentage ||
           o.gst_percentage ||
           o.gst_rate ||
-          (gstAmount > 0 && subtotal > 0 ? Math.round((gstAmount / subtotal) * 100) : (isGst ? 18 : 0))
+          (gstAmount > 0 && subtotal > 0 ? estimateGstPercent(gstAmount, totalAmt, o) : (isGst ? 18 : 0))
         );
         const discountAmount = Number(o.discount_amount ?? o.manual_discount_amount ?? 0);
         const discountValue = Number(o.manual_discount_value || o.discount_value || 0);
@@ -1816,6 +1817,7 @@ export const dbStore = {
           grand_total: totalAmt,
           deposit_amount: depAmt,
           deposit_payment_mode: (String(o.payment_mode || 'CASH').toUpperCase()) as PaymentMode,
+          ...({ payment_mode: String(o.payment_mode || 'CASH').toUpperCase() } as Record<string, any>),
           delivery_date: o.delivery_date || o.expected_delivery_date || null,
           notes: o.notes || o.remarks || null,
           finalized_order_id: null,
@@ -1927,7 +1929,7 @@ export const dbStore = {
             metaToOrderFields(ord).gstPercentage ||
             ord.gst_percentage ||
             ord.gst_rate ||
-            (gstAmount > 0 && subtotal > 0 ? Math.round((gstAmount / subtotal) * 100) : (isGst ? 18 : 0))
+            (gstAmount > 0 && subtotal > 0 ? estimateGstPercent(gstAmount, totalAmt, ord) : (isGst ? 18 : 0))
           );
 
           return {
@@ -1943,6 +1945,7 @@ export const dbStore = {
             grand_total: totalAmt,
             deposit_amount: depAmt,
             deposit_payment_mode: (String(ord.payment_mode || 'CASH').toUpperCase()) as PaymentMode,
+            ...({ payment_mode: String(ord.payment_mode || 'CASH').toUpperCase() } as Record<string, any>),
             delivery_date: ord.delivery_date || ord.expected_delivery_date || null,
             notes: ord.notes || null,
             finalized_order_id: null,
