@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { Ruler, Search, Trash2, ChevronDown, Loader2, Phone, Calendar, Download, Settings2, RefreshCw, Printer } from "lucide-react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Ruler, Search, Trash2, ChevronDown, Loader2, Phone, Calendar, Download, Settings2, RefreshCw, Printer, X, ExternalLink, Eye } from "lucide-react";
 import OptionsManager from "./MeasurementOptionsManager";
 import NeckTypeIcon from "./NeckTypeIcon";
 import { fetchMeasurements, removeMeasurement, updateMeasurementStatus } from "@/app/pos/actions";
@@ -59,6 +59,9 @@ export default function Measurements({
   const [statusFilter, setStatusFilter] = useState<"ALL" | MeasurementStatus>("ALL");
   const [openId, setOpenId] = useState<string | null>(null);
   const [showOptions, setShowOptions] = useState(false);
+  // In-app print preview (like the invoice preview) - Print happens from inside it
+  const [preview, setPreview] = useState<{ html: string; title: string } | null>(null);
+  const previewFrame = useRef<HTMLIFrameElement>(null);
 
   // Period buttons just fill From/To; the highlighted button is whichever range matches the dates.
   const activePeriod = PERIODS.find((p) => {
@@ -183,8 +186,8 @@ export default function Measurements({
   };
 
   // Prints the given bills in a clean, tailor-friendly layout via a popup window.
-  const printRecords = (list: MeasurementOrder[]) => {
-    if (list.length === 0) return;
+  const buildPrintDoc = (list: MeasurementOrder[]): { html: string; title: string } | null => {
+    if (list.length === 0) return null;
     const esc = (s: unknown) =>
       String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
     // One A4 page per billed item: header, big measurement boxes, remarks and a notes area
@@ -217,9 +220,15 @@ export default function Measurements({
               </div>
             </div>
             <div class="billed">
-              <div class="lbl">Billed To</div>
-              <div class="cust">${esc(r.customer_name || "Guest")}</div>
-              <div class="sub">${r.phone ? `+91 ${esc(r.phone)}` : ""}${r.address ? ` &nbsp;·&nbsp; ${esc(r.address)}` : ""}</div>
+              <div>
+                <div class="lbl">Billed To</div>
+                <div class="cust">${esc(r.customer_name || "Guest")}</div>
+                <div class="sub">${r.phone ? `+91 ${esc(r.phone)}` : ""}${r.address ? ` &nbsp;·&nbsp; ${esc(r.address)}` : ""}</div>
+              </div>
+              <div class="supply">
+                <div class="lbl">Place of Supply</div>
+                <div class="pos">Tamil Nadu (33)</div>
+              </div>
             </div>
           </header>
 
@@ -234,7 +243,7 @@ export default function Measurements({
           <div class="h">Measurements</div>
           ${
             filled.length
-              ? `<div class="grid">${filled.map((f) => `<div class="m"><span>${esc(f.label)}</span><b>${esc(it.measurements[f.key])}<i> cm</i></b></div>`).join("")}</div>`
+              ? `<div class="grid" style="grid-template-columns:repeat(${filled.length > 9 ? 4 : 3},1fr)">${filled.map((f) => `<div class="m"><span>${esc(f.label)}</span><b>${esc(it.measurements[f.key])}<i> cm</i></b></div>`).join("")}</div>`
               : `<div class="none">No measurements recorded</div>`
           }
 
@@ -245,57 +254,156 @@ export default function Measurements({
 
           <div class="h">Tailor Notes</div>
           <div class="notes"></div>
+
+          <div class="signrow">
+            <div class="sign">
+              <div class="sigline"></div>
+              <div class="siglabel">Authorized Signature</div>
+              <div class="sigshop">For ${esc(BRAND_EN)}</div>
+            </div>
+          </div>
+          <div class="foot">Powered by Cenexa Systems © 2026</div>
         </section>`);
       });
     });
     const body = pages.join("");
-    const w = window.open("", "_blank", "width=900,height=700");
-    if (!w) {
-      toast.error("Allow pop-ups to print");
-      return;
-    }
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Measurements</title><style>
-      @page { size: A4 portrait; margin: 8mm; }
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Measurements</title><style>
+      @page { size: A4 portrait; margin: 6mm; }
       *{box-sizing:border-box}
       html,body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-      .page{display:flex;flex-direction:column;min-height:280mm;page-break-after:always;padding:3mm 4mm}
+      /* one item = one A4 sheet: 297mm tall in total (6mm page margin + 285mm sheet + 6mm) */
+      .page{display:flex;flex-direction:column;height:285mm;overflow:hidden;page-break-after:always;padding:5mm 9mm}
       .page:last-child{page-break-after:auto}
-      header{border-bottom:3px solid #F500A0;padding-bottom:4mm;margin-bottom:5mm}
-      .brand{display:flex;justify-content:space-between;align-items:flex-start;gap:8mm;padding-bottom:4mm;border-bottom:1px solid #ddd}
-      .shop{font-size:22px;font-weight:900;letter-spacing:.01em;text-transform:uppercase;line-height:1.15}
-      .addr{font-size:12.5px;color:#444;margin-top:1.5mm;max-width:118mm;line-height:1.35}.addr.strong{color:#111;font-weight:700}
+      @media screen{
+        html,body{background:#d9dce1}
+        body{padding:10px 0}
+        .page{width:210mm;height:297mm;margin:0 auto 14px;background:#fff;box-shadow:0 6px 28px rgba(0,0,0,.22);padding:10mm 12mm;page-break-after:auto}
+      }
+      header{border-bottom:3px solid #F500A0;padding-bottom:3mm;margin-bottom:4mm}
+      .brand{display:flex;justify-content:space-between;align-items:flex-start;gap:8mm;padding-bottom:3mm;border-bottom:1px solid #ddd}
+      .shop{font-size:20px;font-weight:900;letter-spacing:.01em;text-transform:uppercase;line-height:1.15}
+      .addr{font-size:11.5px;color:#444;margin-top:1mm;max-width:118mm;line-height:1.35}.addr.strong{color:#111;font-weight:700}
       .tagwrap{text-align:right;flex-shrink:0}
-      .tag{display:inline-block;background:#FCE7F3;border:1px solid #F9A8D4;color:#F500A0;font-weight:900;font-size:12px;letter-spacing:.08em;padding:1.5mm 3mm;border-radius:2mm}
-      .no{font-size:16px;font-weight:800;font-family:"Courier New",monospace;margin-top:2.5mm}
-      .sub{font-size:13px;color:#444;margin-top:1.2mm}
-      .billed{padding-top:3.5mm}.lbl{font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:.1em;text-transform:uppercase}
-      .cust{font-size:24px;font-weight:800;line-height:1.15;margin-top:1mm}
-      .item{border:2px solid #222;border-radius:3mm;padding:4mm;margin-bottom:5mm}
+      .tag{display:inline-block;background:#FCE7F3;border:1px solid #F9A8D4;color:#F500A0;font-weight:900;font-size:11px;letter-spacing:.08em;padding:1.2mm 3mm;border-radius:2mm}
+      .no{font-size:15px;font-weight:800;font-family:"Courier New",monospace;margin-top:2mm}
+      .sub{font-size:12px;color:#444;margin-top:1mm}
+      .billed{display:flex;justify-content:space-between;align-items:flex-start;gap:8mm;padding-top:3mm}
+      .supply{text-align:right}.pos{font-size:14px;font-weight:800;margin-top:1mm}
+      .lbl{font-size:10px;font-weight:800;color:#64748b;letter-spacing:.1em;text-transform:uppercase}
+      .cust{font-size:22px;font-weight:800;line-height:1.15;margin-top:1mm}
+      .item{border:2px solid #222;border-radius:3mm;padding:3mm 4mm;margin-bottom:4mm}
       .row{display:flex;justify-content:space-between;align-items:flex-start;gap:6mm}
-      .name{font-size:24px;font-weight:800}.cnt{font-size:14px;font-weight:600;color:#555}
-      .price{text-align:right;font-size:20px;font-weight:700}.due{font-size:14px;font-weight:600;color:#B45309}
-      .info{display:grid;grid-template-columns:repeat(4,1fr);gap:4mm;margin-top:5mm}
-      .cell{border:1px solid #bbb;border-radius:2mm;padding:3mm}
-      .cell span{display:block;font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.05em}
-      .cell b{display:block;font-size:17px;margin-top:1mm}
-      .h{font-size:13px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#F500A0;margin:2mm 0 3mm}
-      .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4mm;margin-bottom:5mm}
-      .m{border:2px solid #222;border-radius:3mm;padding:5mm 6mm;min-height:26mm;display:flex;flex-direction:column;justify-content:space-between}
-      .m span{font-size:13px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.04em}
-      .m b{font-size:32px;font-weight:800;line-height:1.1}.m i{font-size:15px;font-style:normal;font-weight:600;color:#444}
-      .none{font-size:15px;color:#777;margin-bottom:6mm}
-      .remarks{border:1px solid #bbb;border-radius:2mm;padding:4mm 6mm;min-height:20mm;font-size:16px;margin-bottom:5mm}
-      .remarks ol{margin:0;padding-left:6mm}.remarks li{margin-bottom:1.5mm}
-      .notes{flex:1;min-height:28mm;border:1px solid #bbb;border-radius:2mm;
-        background-image:linear-gradient(to bottom,transparent calc(10mm - 1px),#d4d4d4 calc(10mm - 1px));background-size:100% 10mm;background-repeat:repeat}
-    </style></head><body>${body}</body></html>`);
-    w.document.close();
+      .name{font-size:22px;font-weight:800}.cnt{font-size:13px;font-weight:600;color:#555}
+      .price{text-align:right;font-size:18px;font-weight:700}.due{font-size:13px;font-weight:600;color:#B45309}
+      .info{display:grid;grid-template-columns:repeat(4,1fr);gap:3mm;margin-top:3mm}
+      .cell{border:1px solid #bbb;border-radius:2mm;padding:2mm 3mm}
+      .cell span{display:block;font-size:10px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.05em}
+      .cell b{display:block;font-size:15px;margin-top:.5mm}
+      .h{font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#F500A0;margin:1mm 0 2.5mm}
+      .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:3mm;margin-bottom:4mm}
+      .m{border:2px solid #222;border-radius:3mm;padding:3mm 5mm;min-height:21mm;display:flex;flex-direction:column;justify-content:space-between}
+      .m span{font-size:12px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.04em}
+      .m b{font-size:28px;font-weight:800;line-height:1.1}.m i{font-size:14px;font-style:normal;font-weight:600;color:#444}
+      .none{font-size:14px;color:#777;margin-bottom:4mm}
+      .remarks{padding:0 0 0 1mm;min-height:14mm;font-size:15px;margin-bottom:3mm}
+      .remarks ol{margin:0;padding-left:6mm}.remarks li{margin-bottom:1mm}
+      .notes{flex:1;min-height:6mm}
+      .signrow{display:flex;justify-content:flex-end;margin-top:3mm}
+      .sign{width:62mm;text-align:center}
+      .sigline{border-top:1.5px solid #111;margin-top:11mm}
+      .siglabel{font-size:12.5px;font-weight:800;margin-top:1.5mm}
+      .sigshop{font-size:10.5px;color:#555;margin-top:.5mm}
+      .foot{text-align:center;font-size:9.5px;color:#888;border-top:1px solid #e5e5e5;margin-top:4mm;padding-top:2mm}
+    </style></head><body>${body}</body></html>`;
+    return {
+      html,
+      title: list.length === 1 ? `#${list[0].invoice_no}` : `${list.length} bills`,
+    };
+  };
+
+  // Preview: opens the preview window (Print is inside it)
+  const openPreview = (list: MeasurementOrder[]) => {
+    const d = buildPrintDoc(list);
+    if (d) setPreview(d);
+  };
+
+  // Print: straight to the print dialog, no preview step
+  const printNow = (list: MeasurementOrder[]) => {
+    const d = buildPrintDoc(list);
+    if (!d) return;
+    const f = document.createElement("iframe");
+    f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
+    f.srcdoc = d.html;
+    f.onload = () => {
+      setTimeout(() => {
+        f.contentWindow?.focus();
+        f.contentWindow?.print();
+        setTimeout(() => f.remove(), 60_000);
+      }, 300);
+    };
+    document.body.appendChild(f);
+  };
+
+  const printFromPreview = () => {
+    const w = previewFrame.current?.contentWindow;
+    if (!w) return;
     w.focus();
-    setTimeout(() => w.print(), 250);
+    w.print();
+  };
+
+  const openPreviewFullPage = () => {
+    if (!preview) return;
+    const url = URL.createObjectURL(new Blob([preview.html], { type: "text/html" }));
+    window.open(url, "_blank", "noopener");
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   };
 
   return (
     <div className="space-y-5">
+      {/* Print preview (same look as the invoice preview) */}
+      {preview && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-xs z-[400] flex items-center justify-center p-2 sm:p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl h-[94vh] flex flex-col overflow-hidden border border-neutral-300">
+            <div className="px-4 py-3 flex justify-between items-center bg-neutral-900 text-white border-b border-neutral-800 shrink-0">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <span className="w-2.5 h-2.5 rounded-full bg-[#F500A0]" />
+                <h3 className="font-bold text-xs uppercase tracking-wider flex items-center gap-1.5 text-white">
+                  <span>Measurement Preview</span>
+                  <span className="text-neutral-400 font-mono">{preview.title}</span>
+                </h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={printFromPreview}
+                  className="flex items-center gap-1.5 text-xs font-bold text-white px-3 py-1.5 bg-[#F500A0] hover:bg-[#D8008D] rounded-lg transition-colors cursor-pointer shadow-xs"
+                >
+                  <Printer className="w-4 h-4" />
+                  <span>Print</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={openPreviewFullPage}
+                  className="text-xs font-semibold text-neutral-300 hover:text-white px-2.5 py-1.5 bg-white/10 hover:bg-white/20 rounded-lg transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  <span>Full Page</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreview(null)}
+                  className="w-7 h-7 flex items-center justify-center bg-white/10 hover:bg-white/20 text-white rounded-lg transition-colors cursor-pointer"
+                  aria-label="Close preview"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+            <iframe ref={previewFrame} title="Measurement preview" srcDoc={preview.html} className="flex-1 w-full bg-[#d9dce1] border-0" />
+          </div>
+        </div>
+      )}
+
       {/* Header: title, period, date range, actions */}
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
         <div>
@@ -336,7 +444,14 @@ export default function Measurements({
             <Download className="w-4 h-4" /> Export Excel
           </button>
           <button
-            onClick={() => printRecords(visible)}
+            onClick={() => openPreview(visible)}
+            disabled={visible.length === 0}
+            className="text-xs font-black uppercase tracking-wider border-2 border-black/15 text-black bg-white hover:border-[#F500A0] hover:text-[#F500A0] disabled:opacity-40 px-5 py-2.5 rounded-full flex items-center gap-2 cursor-pointer transition-colors"
+          >
+            <Eye className="w-4 h-4" /> Preview
+          </button>
+          <button
+            onClick={() => printNow(visible)}
             disabled={visible.length === 0}
             className="text-xs font-black uppercase tracking-wider border-2 border-[#F500A0] text-[#F500A0] bg-white hover:bg-[#F500A0]/5 disabled:opacity-40 px-5 py-2.5 rounded-full flex items-center gap-2 cursor-pointer"
           >
@@ -473,7 +588,20 @@ export default function Measurements({
                       </option>
                     ))}
                   </select>
-                  <button onClick={() => printRecords([r])} className="p-2 rounded-lg border border-black/10 hover:bg-black/5 cursor-pointer" aria-label="Print">
+                  <button
+                    onClick={() => openPreview([r])}
+                    className="p-2.5 rounded-lg bg-gray-100 text-gray-800 hover:bg-gray-200 transition-colors cursor-pointer"
+                    title="Preview"
+                    aria-label="Preview"
+                  >
+                    <Eye className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => printNow([r])}
+                    className="p-2.5 rounded-lg bg-pink-50 text-[#F500A0] hover:bg-pink-100 transition-colors cursor-pointer"
+                    title="Print"
+                    aria-label="Print"
+                  >
                     <Printer className="w-4 h-4" />
                   </button>
                   {canDelete && (

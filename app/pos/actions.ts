@@ -261,8 +261,13 @@ export async function finalizeAdvanceOrder(payload: {
   couponCode?: string | null;
   splitCash?: number;
   splitGpay?: number;
-}): Promise<{ orderId: string }> {
-  return await dbStore.finalizeAdvanceOrder(payload);
+}): Promise<{ orderId: string; error?: string }> {
+  try {
+    return await dbStore.finalizeAdvanceOrder(payload);
+  } catch (e: any) {
+    console.error('finalizeAdvanceOrder failed:', e);
+    return { orderId: '', error: e?.message || String(e) };
+  }
 }
 
 // Coupon validation & management

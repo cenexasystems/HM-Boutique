@@ -2,6 +2,8 @@
 
 import { summarizeCashflow, dedupeAdvance, allocatePayment } from "@/lib/paymentSplit";
 import { buildPaymentRows } from "@/lib/paymentRows";
+import ExpenseCategoryManager, { type CategoryChanges } from "@/app/components/ExpenseCategoryManager";
+import { loadExpenseCategories, applyCategoryChanges as saveCategoryChanges, DEFAULT_EXPENSE_CATEGORIES } from "@/lib/expenseCategories";
 import { buildXlsx, buildXlsxMulti, type XlsxCell } from "@/lib/xlsx";
 import CreditDueNotifier from "@/app/components/CreditDueNotifier";
 import React, { useState, useRef, useEffect, useMemo } from "react";
@@ -625,6 +627,10 @@ export default function POSBilling() {
     new Date().toISOString().split("T")[0],
   );
   const [expenseCategoryFilter, setExpenseCategoryFilter] = useState<string>("ALL");
+  // Expense categories are managed from the Expense Tracker (Manage Categories)
+  const [expenseCategoryList, setExpenseCategoryList] = useState<string[]>([...DEFAULT_EXPENSE_CATEGORIES]);
+  const [showCategoryManager, setShowCategoryManager] = useState(false);
+  const [savingCategories, setSavingCategories] = useState(false);
   const [expenseSearch, setExpenseSearch] = useState("");
 
   // Sorting states
@@ -1634,7 +1640,7 @@ export default function POSBilling() {
       const nowIso = new Date().toISOString();
 
       // Persist to backend first! If this throws, execution jumps to catch and popup stays open
-      await finalizeAdvanceOrder({
+      const finalizeResult = await finalizeAdvanceOrder({
         advanceOrderId: selectedAdvance.id,
         invoiceId,
         isGst: advTotals.gstAmount > 0,
@@ -1648,6 +1654,7 @@ export default function POSBilling() {
         splitGpay: recvGpay,
         billDate: nowIso,
       });
+      if (finalizeResult?.error) throw new Error(finalizeResult.error);
 
       const mappedOrder: any = normalizeOrder({
         id: invoiceId,
@@ -1729,7 +1736,7 @@ export default function POSBilling() {
       await fetchData();
     } catch (err) {
       console.error("Failed to finalize advance order:", err);
-      alert("Could not finalize the advance order. Please try again.");
+      alert(`Could not finalize the advance order.\n\nReason: ${(err as Error)?.message || "unknown error"}`);
     } finally {
       setIsFinalizing(false);
     }
@@ -2225,7 +2232,7 @@ export default function POSBilling() {
   const openEditExpenseModal = (expense: Expense) => {
     setEditingExpense(expense);
     setEditTitle(expense.title || "");
-    const isPreset = (EXPENSE_CATEGORIES as readonly string[]).includes(expense.category);
+    const isPreset = allExpenseCategories.includes(expense.category);
     if (isPreset) {
       setEditCategory(expense.category);
       setEditCustomCategory("");
@@ -2316,6 +2323,55 @@ export default function POSBilling() {
     }
   };
 
+  useEffect(() => {
+    void loadExpenseCategories().then((list) => setExpenseCategoryList(list));
+  }, []);
+
+  // Every category in the list, plus any category an existing expense still uses (nothing is ever hidden)
+  const allExpenseCategories = React.useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    [...expenseCategoryList, ...expenses.map((e) => e.category)].forEach((c) => {
+      const name = String(c || "").trim();
+      if (name && !seen.has(name.toLowerCase())) {
+        seen.add(name.toLowerCase());
+        out.push(name);
+      }
+    });
+    return out;
+  }, [expenseCategoryList, expenses]);
+
+  const categoryUsage = React.useMemo(() => {
+    const m: Record<string, { count: number; total: number }> = {};
+    expenses.forEach((e) => {
+      const k = e.category;
+      m[k] = m[k] || { count: 0, total: 0 };
+      m[k].count += 1;
+      m[k].total += Number(e.amount) || 0;
+    });
+    return m;
+  }, [expenses]);
+
+  // Add / rename / delete categories in the database, then reload so every screen shows the result.
+  const applyCategoryChanges = async (ch: CategoryChanges) => {
+    setSavingCategories(true);
+    try {
+      await saveCategoryChanges({ adds: ch.adds, renames: ch.renames, deletes: ch.deletes, moves: ch.moves });
+      const [list, fresh] = await Promise.all([loadExpenseCategories(), fetchExpenses()]);
+      setExpenseCategoryList(list);
+      setExpenses(fresh.map((e) => ({ ...e, amount: Number(e.amount) || 0 })));
+      const gone = (c: string) => ch.deletes.includes(c) || ch.renames[c] !== undefined;
+      if (expenseCategoryFilter !== "ALL" && gone(expenseCategoryFilter)) setExpenseCategoryFilter("ALL");
+      if (!list.includes(expCategory) && expCategory !== "__custom__") setExpCategory(list[0] || "Miscellaneous");
+      setShowCategoryManager(false);
+      toast.success("Categories updated");
+    } catch (err: any) {
+      toast.error(err?.message || "Could not update categories");
+    } finally {
+      setSavingCategories(false);
+    }
+  };
+
   // Expenses filtered for the Expenses tab (period + category + search)
   const expenseStats = React.useMemo(() => {
     const filtered = expenses.filter((e) => {
@@ -2368,8 +2424,8 @@ export default function POSBilling() {
       .sort((a, b) => b.amount - a.amount);
     const topCategory = categoryBreakdown[0]?.category || "None";
     const allCategories = Array.from(
-      new Set(expenses.map((e) => e.category)),
-    ).sort();
+      new Set([...expenseCategoryList, ...expenses.map((e) => e.category)]),
+    ).sort((a, b) => a.localeCompare(b));
     return {
       filtered: sortedFiltered,
       total,
@@ -2387,6 +2443,7 @@ export default function POSBilling() {
     expenseSearch,
     expenseSortField,
     expenseSortOrder,
+    expenseCategoryList,
   ]);
 
   // Download the expenses currently shown (period + category + search + sort) as .xlsx.
@@ -7814,6 +7871,12 @@ export default function POSBilling() {
               >
                 <Download className="w-4 h-4" /> Export Excel
               </button>
+              <button
+                onClick={() => setShowCategoryManager(true)}
+                className="text-[10px] font-black uppercase tracking-wider border-2 border-black/15 text-black bg-white hover:border-[#F500A0] hover:text-[#F500A0] px-4 py-2 rounded-xl flex items-center gap-2 cursor-pointer transition-colors"
+              >
+                <Tag className="w-4 h-4" /> Manage Categories
+              </button>
               {/* Period filter */}
               <div className="flex flex-wrap items-center gap-1.5 bg-[#FAFAFA] border border-black/10 rounded-xl p-1">
                 {(
@@ -7980,15 +8043,24 @@ export default function POSBilling() {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-[#000000] mb-1">
-                      Category
-                    </label>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[10px] font-bold uppercase tracking-wider text-[#000000]">
+                        Category
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => setShowCategoryManager(true)}
+                        className="text-[10px] font-black uppercase tracking-wider text-[#F500A0] hover:underline cursor-pointer flex items-center gap-1"
+                      >
+                        <Pencil className="w-3 h-3" /> Manage
+                      </button>
+                    </div>
                     <select
                       value={expCategory}
                       onChange={(e) => setExpCategory(e.target.value)}
                       className="w-full bg-[#FAFAFA] border border-black/10 rounded-lg px-3 py-2 text-sm text-[#000000] focus:outline-none focus:border-[#F500A0] cursor-pointer"
                     >
-                      {EXPENSE_CATEGORIES.map((c) => (
+                      {allExpenseCategories.map((c) => (
                         <option key={c} value={c}>
                           {c}
                         </option>
@@ -8355,7 +8427,7 @@ export default function POSBilling() {
                         onChange={(e) => setEditCategory(e.target.value)}
                         className="w-full bg-[#FAFAFA] border border-black/10 rounded-lg px-3 py-2.5 text-sm text-[#000000] focus:outline-none focus:border-[#F500A0] cursor-pointer"
                       >
-                        {EXPENSE_CATEGORIES.map((c) => (
+                        {allExpenseCategories.map((c) => (
                           <option key={c} value={c}>
                             {c}
                           </option>
@@ -8974,6 +9046,15 @@ export default function POSBilling() {
             </div>
           </div>
         )}
+
+        <ExpenseCategoryManager
+          open={showCategoryManager}
+          categories={allExpenseCategories}
+          usage={categoryUsage}
+          saving={savingCategories}
+          onClose={() => setShowCategoryManager(false)}
+          onSave={applyCategoryChanges}
+        />
 
         {/* Invoice Modal */}
         <InvoiceModal
