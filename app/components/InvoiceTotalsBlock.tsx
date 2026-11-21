@@ -81,7 +81,7 @@ export default function InvoiceTotalsBlock({
             </span>
           </div>
           <div className="flex justify-between items-center text-[11px] text-zinc-500">
-            <span>GST @ {totals.gstPercent}% (included)</span>
+            <span>GST @ {totals.gstPercent}% ({totals.taxMode === "exclusive" ? "added" : "included"})</span>
             <span className="font-mono tabular-nums whitespace-nowrap">
               ₹{formatINR(totals.gstAmount)}
             </span>
@@ -114,7 +114,7 @@ export default function InvoiceTotalsBlock({
       {/* Divider & TOTAL */}
       <div className="border-t-2 border-[#F500A0] py-2 mt-2 flex justify-between items-baseline">
         <span className="text-sm font-black uppercase tracking-wider text-[#F500A0]">
-          {totals.gstAmount > 0 ? "TOTAL (incl. GST)" : "TOTAL"}
+          {totals.gstAmount > 0 ? (totals.taxMode === "exclusive" ? "TOTAL (GST added)" : "TOTAL (incl. GST)") : "TOTAL"}
         </span>
         <span className="font-mono font-black text-base text-[#F500A0] tabular-nums whitespace-nowrap">
           ₹{formatINR(totals.grandTotal)}

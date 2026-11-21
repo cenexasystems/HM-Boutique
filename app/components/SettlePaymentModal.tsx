@@ -69,7 +69,11 @@ export default function SettlePaymentModal({ open, title, balance, busy, onConfi
                   type="number"
                   min="0"
                   value={cash}
-                  onChange={(e) => setCash(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setCash(v);
+                    setGpay(v === "" ? "" : String(Math.max(0, Math.round((balance - (Number(v) || 0)) * 100) / 100)));
+                  }}
                   className="mt-1 w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
                 />
               </label>
@@ -79,7 +83,11 @@ export default function SettlePaymentModal({ open, title, balance, busy, onConfi
                   type="number"
                   min="0"
                   value={gpay}
-                  onChange={(e) => setGpay(e.target.value)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setGpay(v);
+                    setCash(v === "" ? "" : String(Math.max(0, Math.round((balance - (Number(v) || 0)) * 100) / 100)));
+                  }}
                   className="mt-1 w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm"
                 />
               </label>

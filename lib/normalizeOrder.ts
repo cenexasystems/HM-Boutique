@@ -36,7 +36,7 @@ export function normalizeOrder(r: any) {
     Boolean(r.deposit_id)
   );
 
-  const dueDate = r.due_date || r.credit_due_date || r.expected_delivery_date || null;
+  const dueDate = r.credit_due_date || r.due_date || r.expected_delivery_date || null;
 
   let rawItems: any[] = [];
   if (Array.isArray(r.items) && r.items.length > 0) {
@@ -90,6 +90,8 @@ export function normalizeOrder(r: any) {
     discount_amount: totals.discount,
     discount_value: totals.discountValue,
     discount_type: totals.discountType,
+    tax_mode: totals.taxMode,
+    taxMode: totals.taxMode,
     taxable: totals.taxable,
     taxableAmount: totals.taxableAmount,
     taxable_amount: totals.taxableAmount,

@@ -17,11 +17,12 @@
 --   The app stores GST %, manual/coupon discount amounts, advance/settlement
 --   payment split and the settlement method inside orders.split_details (jsonb):
 --     { cash, gpay,                         -- split payment at billing
---       gst_percentage,
+--       gst_percentage, tax_mode,            -- tax_mode: 'inclusive' | 'exclusive'
 --       manual_discount, coupon_discount,   -- rupees
 --       advance_paid, advance_mode, advance_cash, advance_gpay,
 --       settle: { mode, cash, gpay, amount, at } }
---   so no further schema change is needed for those.
+--   so no further schema change is needed for those. Bills saved before tax_mode existed
+--   have none stored; the app works the mode out from the saved total.
 -- ============================================================================
 
 
@@ -56,7 +57,7 @@ ALTER TABLE public.orders
   ADD COLUMN IF NOT EXISTS coupon_code             TEXT,
   ADD COLUMN IF NOT EXISTS gst_enabled             BOOLEAN DEFAULT false,
   ADD COLUMN IF NOT EXISTS total_gst               NUMERIC(12,2) DEFAULT 0,
-  ADD COLUMN IF NOT EXISTS gst_amount              NUMERIC(12,2) DEFAULT 0,   -- GST is always inclusive
+  ADD COLUMN IF NOT EXISTS gst_amount              NUMERIC(12,2) DEFAULT 0,   -- inclusive or added on top: see split_details.tax_mode
   ADD COLUMN IF NOT EXISTS delivery_charge         NUMERIC(12,2) DEFAULT 0,
   -- payment
   ADD COLUMN IF NOT EXISTS payment_mode            TEXT,
@@ -129,7 +130,8 @@ EXCEPTION WHEN OTHERS THEN
 END $$;
 
 -- 2c. GST %: old rows never stored it. Derive it from the inclusive split
---     (taxable = total - delivery - gst) and round to a whole percent.
+--     (taxable = total - delivery - gst) and round to a whole percent. This formula is
+--     the same for inclusive and exclusive bills.
 UPDATE public.orders o
 SET split_details = COALESCE(o.split_details, '{}'::jsonb)
       || jsonb_build_object(

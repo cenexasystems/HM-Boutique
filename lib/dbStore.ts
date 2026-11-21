@@ -773,7 +773,7 @@ export const dbStore = {
               cash_received: Number(o.cash_received ?? (Boolean(o.is_credit) ? 0 : total)),
               amount_paid: o.amount_paid ?? undefined,
               balance_due: o.balance_due ?? undefined,
-              due_date: o.due_date || o.credit_due_date || null,
+              due_date: o.credit_due_date || o.due_date || null,
               split_cash: Number(metaToOrderFields(o).fields.split_cash) || 0,
               split_gpay: Number(metaToOrderFields(o).fields.split_gpay) || 0,
               ...metaToOrderFields(o).fields,
@@ -1020,7 +1020,7 @@ export const dbStore = {
             cash_received: Number(row.cash_received ?? row.received_amount ?? (Boolean(row.is_credit) ? 0 : total)),
             amount_paid: row.amount_paid ?? undefined,
             balance_due: row.balance_due ?? undefined,
-            due_date: row.due_date || row.credit_due_date || null,
+            due_date: row.credit_due_date || row.due_date || null,
             split_cash: Number(metaToOrderFields(row).fields.split_cash) || 0,
             split_gpay: Number(metaToOrderFields(row).fields.split_gpay) || 0,
             ...metaToOrderFields(row).fields,
@@ -1148,6 +1148,7 @@ export const dbStore = {
     couponCode?: string | null;
     manualDiscountAmount?: number;
     couponDiscountAmount?: number;
+    taxMode?: 'exclusive' | 'inclusive';
     advancePaidEarlier?: number;
     advanceMode?: string;
     advanceCash?: number;
@@ -1218,6 +1219,7 @@ export const dbStore = {
             gstPercentage: isGst ? Number(payload.gstPercentage) || 0 : 0,
             manualDiscount: payload.manualDiscountAmount !== undefined ? Number(payload.manualDiscountAmount) || 0 : Number(payload.discountAmount) || 0,
             couponDiscount: Number(payload.couponDiscountAmount) || 0,
+            taxMode: payload.taxMode,
             advancePaid: payload.advancePaidEarlier,
             advanceMode: payload.advanceMode,
             advanceCash: payload.advanceCash,
@@ -2004,6 +2006,7 @@ export const dbStore = {
     manualDiscountAmount?: number;
     couponDiscountAmount?: number;
     couponCode?: string | null;
+    taxMode?: 'exclusive' | 'inclusive';
     depositSplitCash?: number;
     depositSplitGpay?: number;
     deliveryFee?: number;
@@ -2083,6 +2086,7 @@ export const dbStore = {
               gstPercentage: isGst ? Number(payload.gstPercentage) || 0 : 0,
               manualDiscount: payload.manualDiscountAmount !== undefined ? Number(payload.manualDiscountAmount) || 0 : Number(payload.discountAmount) || 0,
               couponDiscount: Number(payload.couponDiscountAmount) || 0,
+              taxMode: payload.taxMode,
             }),
             gst_enabled: isGst,
             total_gst: isGst ? (payload.gstAmount || 0) : 0,
@@ -2375,6 +2379,7 @@ export const dbStore = {
     // Reuse the exact discount split saved on the advance bill so the final invoice
     // total always equals the advance total (coupon included).
     const advTotalsFull = calculateOrderTotals(advance);
+    const billTaxMode = advTotalsFull.taxMode;
     const manualAmt = payload.manualDiscountAmount ?? advTotalsFull.manualDiscount;
     const couponAmt = payload.couponDiscountAmount ?? advTotalsFull.couponDiscount;
     const orderTotals = calculateOrderTotals({
@@ -2382,6 +2387,7 @@ export const dbStore = {
       subtotal: rawSubtotal,
       manualDiscount: manualAmt,
       couponDiscount: couponAmt,
+      taxMode: billTaxMode,
       discount_type: payload.discountType,
       discount_value: payload.discountValue,
       is_gst: payload.isGst,
@@ -2429,6 +2435,7 @@ export const dbStore = {
       manualDiscountAmount: orderTotals.manualDiscount,
       couponDiscountAmount: orderTotals.couponDiscount,
       couponCode: payload.couponCode || (advance as any).coupon_code || null,
+      taxMode: billTaxMode,
       advancePaidEarlier: advTotalsFull.paid,
       advanceMode: depMode,
       advanceCash: depCash,

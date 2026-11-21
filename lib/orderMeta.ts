@@ -31,6 +31,7 @@ export interface OrderMeta {
   advanceMode: string;
   advanceCash: number;
   advanceGpay: number;
+  taxMode: string;
   settle: SettlementInfo | null;
 }
 
@@ -66,6 +67,7 @@ export function readOrderMeta(row: any): OrderMeta {
     advanceMode: String(d.advance_mode || '').toUpperCase(),
     advanceCash: num(d.advance_cash) ?? 0,
     advanceGpay: num(d.advance_gpay) ?? 0,
+    taxMode: String(d.tax_mode || '').toLowerCase(),
     settle: s
       ? {
           mode: (String(s.mode || 'CASH').toUpperCase() as SettleMode),
@@ -89,6 +91,7 @@ export function buildSplitDetails(input: {
   advanceMode?: string;
   advanceCash?: number;
   advanceGpay?: number;
+  taxMode?: string;
   settle?: SettlementInfo;
 }): Record<string, any> {
   const base = { ...parseDetails(input.existing) };
@@ -101,6 +104,7 @@ export function buildSplitDetails(input: {
   if (input.advanceMode !== undefined) base.advance_mode = String(input.advanceMode).toUpperCase();
   if (input.advanceCash !== undefined) base.advance_cash = Number(input.advanceCash) || 0;
   if (input.advanceGpay !== undefined) base.advance_gpay = Number(input.advanceGpay) || 0;
+  if (input.taxMode) base.tax_mode = String(input.taxMode).toLowerCase();
   if (input.settle) base.settle = input.settle;
   return base;
 }
@@ -123,6 +127,10 @@ export function metaToOrderFields(row: any) {
     advance_cash: m.advanceCash,
     advance_gpay: m.advanceGpay,
   };
+  if (m.taxMode) {
+    out.tax_mode = m.taxMode;
+    out.taxMode = m.taxMode;
+  }
   if (m.manualDiscount !== null || m.couponDiscount !== null) {
     out.manualDiscount = m.manualDiscount ?? 0;
     out.couponDiscount = m.couponDiscount ?? 0;

@@ -139,10 +139,26 @@ function zip(files: { name: string; data: Uint8Array }[]): Uint8Array {
 }
 
 export function buildXlsx(sheet: XlsxSheet): Blob {
+  return buildXlsxMulti([sheet]);
+}
+
+/** One workbook, several sheets (each with its own header row, widths, filter). */
+export function buildXlsxMulti(sheets: XlsxSheet[]): Blob {
+  const n = sheets.length;
+  const sheetOverrides = sheets
+    .map((_, k) => `<Override PartName="/xl/worksheets/sheet${k + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`)
+    .join("");
+  const workbookSheets = sheets
+    .map((sh, k) => `<sheet name="${esc(sh.sheetName.slice(0, 31))}" sheetId="${k + 1}" r:id="rId${k + 1}"/>`)
+    .join("");
+  const sheetRels = sheets
+    .map((_, k) => `<Relationship Id="rId${k + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${k + 1}.xml"/>`)
+    .join("");
+
   const files = [
     {
       name: "[Content_Types].xml",
-      data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+      data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${sheetOverrides}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
     },
     {
       name: "_rels/.rels",
@@ -150,14 +166,14 @@ export function buildXlsx(sheet: XlsxSheet): Blob {
     },
     {
       name: "xl/workbook.xml",
-      data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${esc(sheet.sheetName.slice(0, 31))}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${workbookSheets}</sheets></workbook>`,
     },
     {
       name: "xl/_rels/workbook.xml.rels",
-      data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+      data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheetRels}<Relationship Id="rId${n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
     },
-    { name: "xl/styles.xml", data: stylesXml(sheet.headerColor || "F500A0") },
-    { name: "xl/worksheets/sheet1.xml", data: sheetXml(sheet) },
+    { name: "xl/styles.xml", data: stylesXml(sheets[0].headerColor || "F500A0") },
+    ...sheets.map((sh, k) => ({ name: `xl/worksheets/sheet${k + 1}.xml`, data: sheetXml(sh) })),
   ].map((f) => ({ name: f.name, data: enc.encode(f.data) }));
 
   const bytes = zip(files);

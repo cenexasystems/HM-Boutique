@@ -1,8 +1,8 @@
 "use client";
 
-import { summarizeCashflow, dedupeAdvance } from "@/lib/paymentSplit";
+import { summarizeCashflow, dedupeAdvance, allocatePayment } from "@/lib/paymentSplit";
 import { buildPaymentRows } from "@/lib/paymentRows";
-import { buildXlsx, type XlsxCell } from "@/lib/xlsx";
+import { buildXlsx, buildXlsxMulti, type XlsxCell } from "@/lib/xlsx";
 import CreditDueNotifier from "@/app/components/CreditDueNotifier";
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
@@ -503,6 +503,7 @@ export default function POSBilling() {
   const [splitGpay, setSplitGpay] = useState<number>(0);
   const [applyGST, setApplyGST] = useState<boolean>(false);
   const [gstPercentage, setGstPercentage] = useState<number>(18);
+  // Inclusive: GST is inside the price. Exclusive: GST is added on top. Saved with every bill.
   const [taxMode, setTaxMode] = useState<"exclusive" | "inclusive">("inclusive");
   const [activeInvoiceId, setActiveInvoiceId] = useState<string | null>(null);
   const [activeInvoiceData, setActiveInvoiceData] = useState<CompletedOrder | any | null>(null);
@@ -882,6 +883,7 @@ export default function POSBilling() {
     gstPercentage?: number;
     gstAmount?: number;
     paymentMode?: string;
+    taxMode?: string;
     splitCash?: number;
     splitGpay?: number;
     manualDiscount?: number;
@@ -890,37 +892,42 @@ export default function POSBilling() {
     items?: any[];
   } | null>(null);
 
+  // The saved advance order as the receipt/print code understands it (payment mode, split, discounts, GST).
+  const advanceReceiptToOrder = (r: NonNullable<typeof advanceReceipt>) =>
+    normalizeOrder({
+      id: r.id,
+      customer_name: r.customerName,
+      customer_phone: r.customerPhone,
+      total_amount: r.total,
+      deposit_amount: r.deposit,
+      is_advance: true,
+      status: "pending_deposit",
+      items: r.items || [],
+      subtotal: r.subtotal,
+      discount_amount: r.discountAmount ?? r.discount,
+      discount_value: r.discountValue,
+      discount_type: r.discountType,
+      delivery_fee: r.deliveryFee,
+      delivery_charge: r.deliveryFee,
+      is_gst: r.isGst,
+      gst_percentage: r.gstPercentage,
+      gst_amount: r.gstAmount,
+      tax_mode: r.taxMode,
+      payment_mode: r.paymentMode || "CASH",
+      deposit_payment_mode: r.paymentMode || "CASH",
+      split_cash: r.splitCash || 0,
+      split_gpay: r.splitGpay || 0,
+      manualDiscount: r.manualDiscount,
+      couponDiscount: r.couponDiscount,
+      coupon_code: r.couponCode,
+    });;
+
   const orderToPrint = useMemo(() => {
     if (!printModalData) return null;
     const cleanId = String(printModalData.id).replace(/^#/, "");
     if (printModalData.type === "advance") {
       if (advanceReceipt && (advanceReceipt.id === printModalData.id || advanceReceipt.id === cleanId)) {
-        return normalizeOrder({
-          id: advanceReceipt.id,
-          customer_name: advanceReceipt.customerName,
-          customer_phone: advanceReceipt.customerPhone,
-          total_amount: advanceReceipt.total,
-          deposit_amount: advanceReceipt.deposit,
-          is_advance: true,
-          status: "pending_deposit",
-          items: advanceReceipt.items || [],
-          subtotal: advanceReceipt.subtotal,
-          discount_amount: advanceReceipt.discountAmount ?? advanceReceipt.discount,
-          discount_value: advanceReceipt.discountValue,
-          discount_type: advanceReceipt.discountType,
-          delivery_fee: advanceReceipt.deliveryFee,
-          delivery_charge: advanceReceipt.deliveryFee,
-          is_gst: advanceReceipt.isGst,
-          gst_percentage: advanceReceipt.gstPercentage,
-          gst_amount: advanceReceipt.gstAmount,
-          payment_mode: advanceReceipt.paymentMode || "CASH",
-          deposit_payment_mode: advanceReceipt.paymentMode || "CASH",
-          split_cash: advanceReceipt.splitCash || 0,
-          split_gpay: advanceReceipt.splitGpay || 0,
-          manualDiscount: advanceReceipt.manualDiscount,
-          couponDiscount: advanceReceipt.couponDiscount,
-          coupon_code: advanceReceipt.couponCode,
-        });
+        return advanceReceiptToOrder(advanceReceipt);
       }
       if (selectedAdvance && (selectedAdvance.id === printModalData.id || selectedAdvance.id === cleanId)) {
         return normalizeOrder(selectedAdvance);
@@ -1481,6 +1488,7 @@ export default function POSBilling() {
         manualDiscountAmount: manualDiscount,
         couponDiscountAmount: couponDiscount,
         couponCode: appliedCoupon?.code || null,
+        taxMode,
         depositSplitCash: advDepositPaymentMode === "SPLIT" ? Number(advSplitCash) || 0 : 0,
         depositSplitGpay: advDepositPaymentMode === "SPLIT" ? Number(advSplitGpay) || 0 : 0,
         deliveryFee: Number(deliveryFee) || 0,
@@ -1547,6 +1555,7 @@ export default function POSBilling() {
         gstPercentage: receiptGstPercentage,
         gstAmount: receiptGstAmount,
         paymentMode: advDepositPaymentMode,
+        taxMode,
         splitCash: advDepositPaymentMode === "SPLIT" ? Number(advSplitCash) || 0 : 0,
         splitGpay: advDepositPaymentMode === "SPLIT" ? Number(advSplitGpay) || 0 : 0,
         manualDiscount,
@@ -1674,6 +1683,7 @@ export default function POSBilling() {
         advancePaidEarlier: advancePaidEarlier,
         manualDiscount: advTotals.manualDiscount,
         couponDiscount: advTotals.couponDiscount,
+        tax_mode: advTotals.taxMode,
         advance_paid_earlier: advancePaidEarlier,
         settle_mode: receivePaymentMode === "GPAY" || receivePaymentMode === "SPLIT" ? receivePaymentMode : "CASH",
         settle_cash: recvCash,
@@ -1894,6 +1904,7 @@ export default function POSBilling() {
         paymentMode: paymentMode,
         creditDueDate: paymentMode === "CREDIT" ? (creditDueDate || null) : null,
         couponCode: appliedCoupon?.code || null,
+        taxMode,
         manualDiscountAmount: localTotals.manualDiscount,
         couponDiscountAmount: localTotals.couponDiscount,
       });
@@ -1929,6 +1940,7 @@ export default function POSBilling() {
         discount_amount: Number(localCalculatedDiscount) || 0,
         manualDiscount: localTotals.manualDiscount,
         couponDiscount: localTotals.couponDiscount,
+        tax_mode: taxMode,
         split_cash: splitCashVal,
         split_gpay: splitGpayVal,
         discountType: discountType === "percent" ? "PERCENT" : "FIXED",
@@ -2054,7 +2066,9 @@ export default function POSBilling() {
 
     if (orderTotals.isGst && orderTotals.gstAmount > 0) {
       message += `Taxable Amount: ₹${orderTotals.taxableAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n`;
-      message += `GST (${orderTotals.gstPercent}%): +₹${orderTotals.gstAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n`;
+      const gstExcl = orderTotals.taxMode === "exclusive";
+      message += `GST @ ${orderTotals.gstPercent}% (${gstExcl ? "added" : "included"}): ${gstExcl ? "+" : ""}₹${orderTotals.gstAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n`;
+      message += `CGST ${orderTotals.gstPercent / 2}%: ₹${orderTotals.cgst.toLocaleString(undefined, { minimumFractionDigits: 2 })}  |  SGST ${orderTotals.gstPercent / 2}%: ₹${orderTotals.sgst.toLocaleString(undefined, { minimumFractionDigits: 2 })}\n`;
     }
 
     if (orderTotals.deliveryFee > 0) {
@@ -2062,7 +2076,7 @@ export default function POSBilling() {
     }
 
     message += `\n${moneyEmoji} *Total Amount: ₹${orderTotals.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}*\n`;
-    message += `Payment: ${order.paymentMode}\n\n`;
+    message += `Payment: ${order.paymentMode}${order.paymentMode === "SPLIT" ? ` (Cash ₹${(order.splitCash || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} + GPay ₹${(order.splitGpay || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })})` : ""}\n\n`;
     message += `${receiptEmoji} View and download your detailed digital receipt here:\n${invoiceUrl}`;
     const encodedMessage = encodeURIComponent(message);
     const cleanPhone = order.customerPhone.replace(/\D/g, "").slice(-10);
@@ -2883,6 +2897,131 @@ export default function POSBilling() {
     analyticsEndDate,
     analyticsGstFilter,
   ]);
+
+  // Products Excel: everything about the products sold in the current Analytics filters.
+  //  Sheet 1  Product Summary  - qty, bills and revenue per product
+  //  Sheet 2  Product Lines    - every sold line with its bill, date, customer and payment mode
+  //  Sheet 3  Bills            - one row per bill: discount, coupon, GST split, delivery, total, payment split, status
+  //  Sheet 4  Payment Summary  - cash / GPay / split / card received, credit and advance orders
+  const exportProductsExcel = () => {
+    const bills = analyticsFilteredOrders;
+    if (bills.length === 0) {
+      alert("No sold products for the selected filters.");
+      return;
+    }
+    const r2 = (n: number) => Math.round((Number(n) || 0) * 100) / 100;
+    const fmtD = (d: any) => {
+      const t = new Date(d);
+      return isNaN(t.getTime()) ? "" : t.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+    };
+    const modeName = (m: string) =>
+      m === "GPAY" || m === "UPI" ? "GPay / UPI" : m === "SPLIT" ? "Split" : m === "CARD" ? "Card" : m === "CREDIT" ? "Credit" : "Cash";
+
+    type Line = { bill: any; t: ReturnType<typeof getOrderTotals>; pay: ReturnType<typeof allocatePayment>; name: string; qty: number; rate: number };
+    const lines: Line[] = [];
+    const billRows: XlsxCell[][] = [];
+    bills.forEach((o: any) => {
+      const t = getOrderTotals(o);
+      const pay = allocatePayment(o);
+      const kind = o.is_advance || String(o.invoice_no || o.id || "").toUpperCase().startsWith("DEP-")
+        ? "Advance"
+        : o.is_credit || String(o.payment_mode || "").toUpperCase() === "CREDIT" ? "Credit" : "Normal";
+      const mode = String(o.payment_mode || o.paymentMode || "CASH").toUpperCase();
+      billRows.push([
+        o.invoice_no || o.invoiceNo || o.id,
+        fmtD(o.date),
+        o.customerName || o.customer_name || "",
+        o.customerPhone || o.customer_phone || "",
+        t.gstAmount > 0 ? "GST invoice" : "Non-GST bill",
+        kind,
+        r2(t.subtotal),
+        r2(t.manualDiscount),
+        t.discountType === "PERCENT" && t.discountValue > 0 ? `${t.discountValue}%` : "",
+        r2(t.couponDiscount),
+        o.coupon_code || "",
+        t.gstAmount > 0 ? (t.taxMode === "exclusive" ? "Exclusive (added)" : "Inclusive") : "",
+        r2(t.taxableAmount),
+        t.gstAmount > 0 ? t.gstPercent : "",
+        r2(t.gstAmount),
+        r2(t.cgst),
+        r2(t.sgst),
+        r2(t.deliveryFee),
+        r2(t.grandTotal),
+        modeName(kind === "Credit" ? "CREDIT" : mode),
+        r2(pay.cash),
+        r2(pay.gpay),
+        r2(pay.card),
+        kind === "Credit" ? "Settled" : kind === "Advance" ? "Completed" : "Paid",
+        r2((o.advance_paid_earlier as number) || 0),
+        o.credit_paid_at ? fmtD(o.credit_paid_at) : "",
+      ]);
+      (o.items || []).forEach((it: any) => {
+        lines.push({ bill: o, t, pay, name: it.name || it.snapshot_name || "Item", qty: Number(it.qty ?? it.quantity ?? 1) || 1, rate: Number(it.price ?? it.snapshot_price ?? 0) || 0 });
+      });
+    });
+
+    const summary = new Map<string, { qty: number; revenue: number; bills: Set<string> }>();
+    lines.forEach((l) => {
+      const e = summary.get(l.name) || { qty: 0, revenue: 0, bills: new Set<string>() };
+      e.qty += l.qty;
+      e.revenue += l.qty * l.rate;
+      e.bills.add(String(l.bill.invoice_no || l.bill.id));
+      summary.set(l.name, e);
+    });
+    const totalRev = [...summary.values()].reduce((a, e) => a + e.revenue, 0);
+    const summaryRows: XlsxCell[][] = [...summary.entries()]
+      .sort((a, b) => b[1].revenue - a[1].revenue)
+      .map(([name, e], i) => [i + 1, name, e.qty, e.bills.size, r2(e.qty ? e.revenue / e.qty : 0), r2(e.revenue), totalRev > 0 ? `${((e.revenue / totalRev) * 100).toFixed(1)}%` : ""]);
+    summaryRows.push(["", "TOTAL", [...summary.values()].reduce((a, e) => a + e.qty, 0), bills.length, "", r2(totalRev), "100%"]);
+
+    const lineRows: XlsxCell[][] = lines.map((l, i) => [
+      i + 1,
+      l.bill.invoice_no || l.bill.invoiceNo || l.bill.id,
+      fmtD(l.bill.date),
+      l.bill.customerName || l.bill.customer_name || "",
+      l.bill.customerPhone || l.bill.customer_phone || "",
+      l.name,
+      l.qty,
+      r2(l.rate),
+      r2(l.qty * l.rate),
+      l.t.gstAmount > 0 ? "GST invoice" : "Non-GST bill",
+      modeName(String(l.bill.payment_mode || l.bill.paymentMode || "CASH").toUpperCase()),
+    ]);
+
+    const p = payTotals;
+    const payRows: XlsxCell[][] = [
+      ["Cash received", r2(p.cash), p.cashBills],
+      ["GPay / UPI received", r2(p.gpay), p.gpayBills],
+      ["Split bills (cash + GPay)", r2(p.splitAmount), p.splitBills],
+      ["   of which Cash", r2(p.splitCash), ""],
+      ["   of which GPay", r2(p.splitGpay), ""],
+      ["Card received", r2(p.card), p.cardBills],
+      ["Credit - outstanding (unpaid)", r2(p.credit.outstanding), p.credit.outstandingBills],
+      ["Credit - collected (paid)", r2(p.credit.collected), p.credit.collectedBills],
+      ["Advance orders - balance pending", r2(p.advance.pending), p.advance.pendingBills],
+      ["Advance orders - deposits received", r2(p.advance.deposits), p.advance.depositBills],
+      ["Total revenue (completed bills)", r2(bills.reduce((a: number, o: any) => a + (Number(o.grandTotal) || 0), 0)), bills.length],
+    ];
+
+    const blob = buildXlsxMulti([
+      { sheetName: "Product Summary", headers: ["Rank", "Product", "Qty Sold", "No. of Bills", "Avg Rate (₹)", "Revenue (₹)", "Share"], rows: summaryRows, widths: [7, 34, 11, 13, 14, 16, 9] },
+      { sheetName: "Product Lines", headers: ["#", "Bill No", "Date", "Customer", "Phone", "Product", "Qty", "Rate (₹)", "Line Amount (₹)", "Bill Type", "Payment Mode"], rows: lineRows, widths: [6, 22, 14, 20, 14, 30, 7, 12, 16, 14, 14] },
+      {
+        sheetName: "Bills",
+        headers: ["Bill No", "Date", "Customer", "Phone", "Bill Type", "Kind", "Subtotal (₹)", "Manual Discount (₹)", "Discount %", "Coupon Discount (₹)", "Coupon Code", "GST Mode", "Taxable (₹)", "GST %", "GST (₹)", "CGST (₹)", "SGST (₹)", "Delivery (₹)", "Bill Total (₹)", "Payment Mode", "Cash (₹)", "GPay (₹)", "Card (₹)", "Status", "Advance Paid Earlier (₹)", "Credit Paid On"],
+        rows: billRows,
+        widths: [22, 14, 20, 14, 14, 10, 14, 16, 11, 16, 14, 16, 14, 8, 12, 12, 12, 12, 15, 14, 12, 12, 11, 11, 18, 14],
+      },
+      { sheetName: "Payment Summary", headers: ["Payment / Account", "Amount (₹)", "Bills"], rows: payRows, widths: [38, 16, 10] },
+    ]);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `products-analytics-${analyticsPeriod}-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
 
   // Inventory-derived data (pure catalog — stock tracking removed).
   const inventoryProducts = catalog.filter((c) => !c.id.startsWith("default-"));
@@ -3901,6 +4040,46 @@ export default function POSBilling() {
                   </span>
                 </div>
 
+                {/* Bill summary: subtotal, discount, coupon, GST split-up, delivery */}
+                {(() => {
+                  const bt = getOrderTotals(completedBillData);
+                  const money = (n: number) => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                  const row = (label: string, value: string, cls = "") => (
+                    <div key={label} className="flex justify-between items-center text-xs">
+                      <span className="font-semibold text-gray-600">{label}</span>
+                      <span className={`font-bold text-black ${cls}`}>{value}</span>
+                    </div>
+                  );
+                  return (
+                    <div className="space-y-1.5 pb-2 border-b border-dashed border-gray-200">
+                      {row("Subtotal", money(bt.subtotal))}
+                      {bt.manualDiscount > 0 &&
+                        row(
+                          `Manual Discount${bt.discountType === "PERCENT" && bt.discountValue > 0 ? ` (${bt.discountValue}%)` : ""}`,
+                          `-${money(bt.manualDiscount)}`,
+                          "text-[#F500A0]",
+                        )}
+                      {bt.couponDiscount > 0 &&
+                        row(
+                          `Coupon${(completedBillData as any).coupon_code ? ` (${(completedBillData as any).coupon_code})` : ""}`,
+                          `-${money(bt.couponDiscount)}`,
+                          "text-[#F500A0]",
+                        )}
+                      {bt.gstAmount > 0 ? (
+                        <>
+                          {row(bt.taxMode === "exclusive" ? "Taxable Amount (before GST)" : "Taxable Amount", money(bt.taxableAmount))}
+                          {row(`GST @ ${bt.gstPercent}% (${bt.taxMode === "exclusive" ? "added" : "included"})`, money(bt.gstAmount))}
+                          {row(`CGST @ ${bt.gstPercent / 2}%`, money(bt.cgst))}
+                          {row(`SGST @ ${bt.gstPercent / 2}%`, money(bt.sgst))}
+                        </>
+                      ) : (
+                        row("GST", "Non-GST bill")
+                      )}
+                      {bt.deliveryFee > 0 && row("Delivery", money(bt.deliveryFee))}
+                    </div>
+                  );
+                })()}
+
                 <div className="flex justify-between items-center text-xs">
                   <span className="font-semibold text-gray-600">
                     Grand Total
@@ -3913,71 +4092,28 @@ export default function POSBilling() {
                   </span>
                 </div>
 
-                {/* Only extra allowed: one small row "Advance Paid (earlier)" showing previous advance */}
-                {(completedBillData as any).advancePaidEarlier > 0 && (
+                {/* Payment split-up for paid bills: method, cash / GPay split, advance paid earlier, balance */}
+                {completedBillData.paymentMode !== "CREDIT" &&
+                  buildPaymentRows(completedBillData).map((r, i) => (
+                    <div key={i} className="flex justify-between items-center text-xs">
+                      <span className="font-semibold text-gray-600 whitespace-pre">{r.label}</span>
+                      <span
+                        className={`text-sm ${r.strong ? "font-black" : "font-bold"} ${
+                          r.tone === "good" ? "text-emerald-600" : r.tone === "bad" ? "text-rose-600" : "text-black"
+                        }`}
+                      >
+                        {r.value}
+                      </span>
+                    </div>
+                  ))}
+
+                {/* Credit sale: what was paid now (nothing) */}
+                {completedBillData.paymentMode === "CREDIT" && (
                   <div className="flex justify-between items-center text-xs">
-                    <span className="font-semibold text-gray-600">
-                      Advance Paid (earlier)
-                    </span>
-                    <span className="text-sm font-bold text-black">
-                      ₹
-                      {Number((completedBillData as any).advancePaidEarlier).toLocaleString(undefined, {
-                        minimumFractionDigits: 2,
-                      })}
-                    </span>
+                    <span className="font-semibold text-gray-600">Paid Now</span>
+                    <span className="text-sm font-black text-black">₹0.00</span>
                   </div>
                 )}
-
-                {completedBillData.paymentMode === "SPLIT" && (
-                  <>
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="font-semibold text-gray-600">
-                        Paid by Cash
-                      </span>
-                      <span className="text-sm font-bold text-black">
-                        ₹
-                        {(completedBillData.splitCash || 0).toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="font-semibold text-gray-600">
-                        Paid by GPay
-                      </span>
-                      <span className="text-sm font-bold text-black">
-                        ₹
-                        {(completedBillData.splitGpay || 0).toLocaleString(undefined, {
-                          minimumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
-                  </>
-                )}
-
-                <div className="flex justify-between items-center text-xs">
-                  <span className="font-semibold text-gray-600">
-                    {completedBillData.paymentMode === "CREDIT"
-                      ? "Paid Now"
-                      : completedBillData.paymentMode === "GPAY"
-                      ? "Paid via GPay"
-                      : completedBillData.paymentMode === "SPLIT"
-                        ? "Total Received"
-                        : (completedBillData as any).advancePaidEarlier > 0
-                          ? "Actual Amount Received"
-                          : "Amount Received"}
-                  </span>
-                  <span className="text-sm font-black text-black">
-                    ₹
-                    {(
-                      completedBillData.paymentMode === "CREDIT"
-                        ? 0
-                        : (completedBillData as any).actualAmountReceived ??
-                          completedBillData.cashReceived ??
-                          completedBillData.grandTotal
-                    ).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
 
                 {/* Credit sale: nothing received yet - show what is still owed */}
                 {completedBillData.paymentMode === "CREDIT" && (
@@ -4134,12 +4270,47 @@ export default function POSBilling() {
                     ₹{advanceReceipt.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}
                   </span>
                 </div>
-                <div className="flex justify-between items-center text-xs">
-                  <span className="font-semibold text-gray-600">Deposit Paid</span>
-                  <span className="text-sm font-black text-[#166534]">
-                    ₹{advanceReceipt.deposit.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
+                {/* Bill summary + how the deposit was paid (method / cash-GPay split) */}
+                {(() => {
+                  const ro = advanceReceiptToOrder(advanceReceipt);
+                  const bt = getOrderTotals(ro);
+                  const money = (n: number) => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                  const line = (label: string, value: string, cls = "") => (
+                    <div key={label} className="flex justify-between items-center text-xs">
+                      <span className="font-semibold text-gray-600">{label}</span>
+                      <span className={`font-bold text-black ${cls}`}>{value}</span>
+                    </div>
+                  );
+                  const payRows = buildPaymentRows(ro).filter(
+                    (r) => !["Bill Total:", "Balance Due:", "Due Date:"].includes(r.label),
+                  );
+                  return (
+                    <>
+                      <div className="space-y-1.5 pb-2 border-b border-dashed border-gray-200">
+                        {line("Subtotal", money(bt.subtotal))}
+                        {bt.manualDiscount > 0 && line(`Manual Discount${bt.discountType === "PERCENT" && bt.discountValue > 0 ? ` (${bt.discountValue}%)` : ""}`, `-${money(bt.manualDiscount)}`, "text-[#F500A0]")}
+                        {bt.couponDiscount > 0 && line(`Coupon${advanceReceipt.couponCode ? ` (${advanceReceipt.couponCode})` : ""}`, `-${money(bt.couponDiscount)}`, "text-[#F500A0]")}
+                        {bt.gstAmount > 0 ? (
+                          <>
+                            {line(bt.taxMode === "exclusive" ? "Taxable Amount (before GST)" : "Taxable Amount", money(bt.taxableAmount))}
+                            {line(`GST @ ${bt.gstPercent}% (${bt.taxMode === "exclusive" ? "added" : "included"})`, money(bt.gstAmount))}
+                            {line(`CGST @ ${bt.gstPercent / 2}%`, money(bt.cgst))}
+                            {line(`SGST @ ${bt.gstPercent / 2}%`, money(bt.sgst))}
+                          </>
+                        ) : (
+                          line("GST", "Non-GST bill")
+                        )}
+                        {bt.deliveryFee > 0 && line("Delivery", money(bt.deliveryFee))}
+                      </div>
+                      {payRows.map((r, i) => (
+                        <div key={i} className="flex justify-between items-center text-xs">
+                          <span className="font-semibold text-gray-600 whitespace-pre">{r.label}</span>
+                          <span className={`text-sm ${r.strong ? "font-black text-[#166534]" : "font-bold text-black"}`}>{r.value}</span>
+                        </div>
+                      ))}
+                    </>
+                  );
+                })()}
                 <div className="bg-[#FEE2E2] border border-[#DC2626]/30 rounded-lg p-3 sm:p-3.5 flex justify-between items-center mt-1">
                   <span className="text-xs font-bold text-[#991B1B]">Balance Due</span>
                   <span className="text-base sm:text-lg font-black text-[#991B1B]">
@@ -4880,21 +5051,19 @@ export default function POSBilling() {
                                 </div>
                               </div>
 
-                              {taxMode === "inclusive" && (
-                                <div className="flex justify-between items-center text-xs text-gray-600">
-                                  <span>Taxable Base Value</span>
-                                  <span className="font-bold text-black font-mono">
-                                    ₹{taxableAmount.toLocaleString("en-IN", {
-                                      minimumFractionDigits: 2,
-                                      maximumFractionDigits: 2,
-                                    })}
-                                  </span>
-                                </div>
-                              )}
+                              <div className="flex justify-between items-center text-xs text-gray-600">
+                                <span>{taxMode === "inclusive" ? "Taxable Base Value" : "Taxable Amount (before GST)"}</span>
+                                <span className="font-bold text-black font-mono">
+                                  ₹{taxableAmount.toLocaleString("en-IN", {
+                                    minimumFractionDigits: 2,
+                                    maximumFractionDigits: 2,
+                                  })}
+                                </span>
+                              </div>
 
                               <div className="flex justify-between items-center text-xs font-semibold">
                                 <span className="text-[#000000]">
-                                  GST Total ({taxMode === "inclusive" ? "included" : `+${gstPercentage}%`})
+                                  GST Total ({taxMode === "inclusive" ? `included @ ${gstPercentage || 0}%` : `+${gstPercentage || 0}% added`})
                                 </span>
                                 <span className="text-xs font-bold text-[#F500A0] font-mono">
                                   ₹{gstAmount.toLocaleString("en-IN", {
@@ -4906,13 +5075,13 @@ export default function POSBilling() {
 
                               {gstPercentage > 0 && gstAmount > 0 && (
                                 <div className="flex justify-between items-center text-[10px] font-semibold text-gray-500 pl-1 border-t border-black/5 pt-1">
-                                  <span>CGST ({(gstPercentage / 2).toFixed(1)}%) + SGST ({(gstPercentage / 2).toFixed(1)}%)</span>
+                                  <span>
+                                    CGST ({(gstPercentage / 2).toFixed(1)}%) ₹
+                                    {cgstAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </span>
                                   <span className="font-mono">
-                                    ₹{(gstAmount / 2).toLocaleString("en-IN", {
-                                      minimumFractionDigits: 2,
-                                      maximumFractionDigits: 2,
-                                    })}{" "}
-                                    each
+                                    SGST ({(gstPercentage / 2).toFixed(1)}%) ₹
+                                    {sgstAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                                   </span>
                                 </div>
                               )}
@@ -4999,9 +5168,11 @@ export default function POSBilling() {
                                 className="w-full bg-white border border-black/10 focus:border-[#F500A0] rounded-lg px-3 py-2 text-base font-bold text-[#000000] placeholder:text-[#000000] focus:outline-none transition-colors"
                                 value={splitCash || ""}
                                 onWheel={(e) => e.currentTarget.blur()}
-                                onChange={(e) =>
-                                  setSplitCash(parseFloat(e.target.value) || 0)
-                                }
+                                onChange={(e) => {
+                                  const v = parseFloat(e.target.value) || 0;
+                                  setSplitCash(v);
+                                  setSplitGpay(Math.max(0, Math.round((grandTotal - v) * 100) / 100));
+                                }}
                                 placeholder="0.00"
                               />
                             </div>
@@ -5014,9 +5185,11 @@ export default function POSBilling() {
                                 className="w-full bg-white border border-black/10 focus:border-[#F500A0] rounded-lg px-3 py-2 text-base font-bold text-[#000000] placeholder:text-[#000000] focus:outline-none transition-colors"
                                 value={splitGpay || ""}
                                 onWheel={(e) => e.currentTarget.blur()}
-                                onChange={(e) =>
-                                  setSplitGpay(parseFloat(e.target.value) || 0)
-                                }
+                                onChange={(e) => {
+                                  const v = parseFloat(e.target.value) || 0;
+                                  setSplitGpay(v);
+                                  setSplitCash(Math.max(0, Math.round((grandTotal - v) * 100) / 100));
+                                }}
                                 placeholder="0.00"
                               />
                             </div>
@@ -5204,8 +5377,18 @@ export default function POSBilling() {
                   {advDepositPaymentMode === "SPLIT" && (
                     <div className="mt-2 space-y-1.5">
                       <div className="grid grid-cols-2 gap-2">
-                        <input type="number" min="0" value={advSplitCash} onChange={(e) => setAdvSplitCash(e.target.value)} placeholder="Cash ₹" className="border border-black/15 rounded-lg px-2 py-1.5 text-sm font-bold" />
-                        <input type="number" min="0" value={advSplitGpay} onChange={(e) => setAdvSplitGpay(e.target.value)} placeholder="GPay ₹" className="border border-black/15 rounded-lg px-2 py-1.5 text-sm font-bold" />
+                        <input type="number" min="0" value={advSplitCash} onChange={(e) => {
+                          const v = e.target.value;
+                          setAdvSplitCash(v);
+                          const left = Math.max(0, Math.round(((Number(advDeposit) || 0) - (Number(v) || 0)) * 100) / 100);
+                          setAdvSplitGpay(v === "" ? "" : String(left));
+                        }} placeholder="Cash ₹" className="border border-black/15 rounded-lg px-2 py-1.5 text-sm font-bold" />
+                        <input type="number" min="0" value={advSplitGpay} onChange={(e) => {
+                          const v = e.target.value;
+                          setAdvSplitGpay(v);
+                          const left = Math.max(0, Math.round(((Number(advDeposit) || 0) - (Number(v) || 0)) * 100) / 100);
+                          setAdvSplitCash(v === "" ? "" : String(left));
+                        }} placeholder="GPay ₹" className="border border-black/15 rounded-lg px-2 py-1.5 text-sm font-bold" />
                       </div>
                       {(() => {
                         const diff = Math.round(((Number(advDeposit) || 0) - ((Number(advSplitCash) || 0) + (Number(advSplitGpay) || 0))) * 100) / 100;
@@ -5372,8 +5555,18 @@ export default function POSBilling() {
                         {receivePaymentMode === "SPLIT" && (
                           <div className="mt-2 space-y-1.5">
                             <div className="grid grid-cols-2 gap-2">
-                              <input type="number" min="0" value={recvSplitCash} onChange={(e) => setRecvSplitCash(e.target.value)} placeholder="Cash ₹" className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold" />
-                              <input type="number" min="0" value={recvSplitGpay} onChange={(e) => setRecvSplitGpay(e.target.value)} placeholder="GPay ₹" className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold" />
+                              <input type="number" min="0" value={recvSplitCash} onChange={(e) => {
+                                const v = e.target.value;
+                                setRecvSplitCash(v);
+                                const left = Math.max(0, Math.round((finalAmountToCollect - (Number(v) || 0)) * 100) / 100);
+                                setRecvSplitGpay(v === "" ? "" : String(left));
+                              }} placeholder="Cash ₹" className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold" />
+                              <input type="number" min="0" value={recvSplitGpay} onChange={(e) => {
+                                const v = e.target.value;
+                                setRecvSplitGpay(v);
+                                const left = Math.max(0, Math.round((finalAmountToCollect - (Number(v) || 0)) * 100) / 100);
+                                setRecvSplitCash(v === "" ? "" : String(left));
+                              }} placeholder="GPay ₹" className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold" />
                             </div>
                             {(() => {
                               const diff = Math.round((finalAmountToCollect - ((Number(recvSplitCash) || 0) + (Number(recvSplitGpay) || 0))) * 100) / 100;
@@ -7307,9 +7500,17 @@ export default function POSBilling() {
             {analyticsSubTab === "products" && (
               <div className="bg-white border border-black/10 rounded-xl p-6 shadow-sm">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-4">
-                  <h3 className="font-bold text-[#000000] text-sm">
-                    Product Sales Leaderboard
-                  </h3>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <h3 className="font-bold text-[#000000] text-sm">
+                      Product Sales Leaderboard
+                    </h3>
+                    <button
+                      onClick={exportProductsExcel}
+                      className="text-[10px] font-black uppercase tracking-wider border-2 border-[#F500A0] text-[#F500A0] bg-white hover:bg-[#F500A0]/5 px-3 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" /> Export Excel
+                    </button>
+                  </div>
 
                   {/* Product Search Input */}
                   <div className="flex items-center border border-black/10 bg-[#FFFFFF] rounded-lg px-3 py-1.5 gap-2 shadow-xs w-full sm:w-auto animate-in fade-in duration-200">
@@ -8711,52 +8912,44 @@ export default function POSBilling() {
                 </div>
 
                 <div className="border-t border-black/10 pt-4 space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-[#000000] font-semibold">
-                      Subtotal
-                    </span>
-                    <span className="text-[#000000] font-bold">
-                      ₹{selectedOrder.subtotal.toLocaleString()}
-                    </span>
-                  </div>
-                  {selectedOrder.discount > 0 && (
-                    <div className="flex justify-between text-sm">
-                      <span className="text-[#000000] font-semibold">
-                        Discount
-                      </span>
-                      <span className="text-[#27272A] font-bold">
-                        -₹{selectedOrder.discount.toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-                  {(selectedOrder.gstAmount ?? 0) > 0 && (
-                    <div className="flex justify-between text-sm">
-                      <span className="text-[#000000] font-semibold">
-                        GST ({selectedOrder.gstPercentage ?? 0}%)
-                      </span>
-                      <span className="text-[#000000] font-bold">
-                        ₹{(selectedOrder.gstAmount ?? 0).toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-                  {selectedOrder.deliveryFee > 0 && (
-                    <div className="flex justify-between text-sm">
-                      <span className="text-[#000000] font-semibold">
-                        Delivery Fee
-                      </span>
-                      <span className="text-[#000000] font-bold">
-                        ₹{selectedOrder.deliveryFee.toLocaleString()}
-                      </span>
-                    </div>
-                  )}
-                  <div className="flex justify-between text-lg pt-2 mt-2 border-t border-transparent">
-                    <span className="text-[#000000] font-black uppercase tracking-tight">
-                      Total{" "}
-                    </span>
-                    <span className="text-[#F500A0] font-black">
-                      ₹{selectedOrder.grandTotal.toLocaleString()}
-                    </span>
-                  </div>
+                  {/* Full split-up, calculated the same way as the bill: discount, coupon, GST (included / added), delivery */}
+                  {(() => {
+                    const bt = getOrderTotals(selectedOrder);
+                    const money = (n: number) => `₹${n.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+                    const line = (label: string, value: string, cls = "text-[#000000]") => (
+                      <div key={label} className="flex justify-between text-sm">
+                        <span className="text-[#000000] font-semibold">{label}</span>
+                        <span className={`${cls} font-bold`}>{value}</span>
+                      </div>
+                    );
+                    const excl = bt.taxMode === "exclusive";
+                    return (
+                      <>
+                        {line("Subtotal", money(bt.subtotal))}
+                        {bt.manualDiscount > 0 &&
+                          line(`Manual Discount${bt.discountType === "PERCENT" && bt.discountValue > 0 ? ` (${bt.discountValue}%)` : ""}`, `-${money(bt.manualDiscount)}`, "text-[#F500A0]")}
+                        {bt.couponDiscount > 0 &&
+                          line(`Coupon${(selectedOrder as any).coupon_code ? ` (${(selectedOrder as any).coupon_code})` : ""}`, `-${money(bt.couponDiscount)}`, "text-[#F500A0]")}
+                        {bt.gstAmount > 0 ? (
+                          <>
+                            {line(excl ? "Taxable Amount (before GST)" : "Taxable Amount", money(bt.taxableAmount))}
+                            {line(`GST @ ${bt.gstPercent}% (${excl ? "added" : "included"})`, `${excl ? "+" : ""}${money(bt.gstAmount)}`)}
+                            {line(`CGST @ ${bt.gstPercent / 2}%`, money(bt.cgst), "text-gray-600")}
+                            {line(`SGST @ ${bt.gstPercent / 2}%`, money(bt.sgst), "text-gray-600")}
+                          </>
+                        ) : (
+                          line("GST", "Non-GST bill", "text-gray-600")
+                        )}
+                        {bt.deliveryFee > 0 && line("Delivery Fee", `+${money(bt.deliveryFee)}`)}
+                        <div className="flex justify-between text-lg pt-2 mt-2 border-t border-transparent">
+                          <span className="text-[#000000] font-black uppercase tracking-tight">
+                            Total{bt.gstAmount > 0 ? (excl ? " (GST added)" : " (incl. GST)") : ""}
+                          </span>
+                          <span className="text-[#F500A0] font-black">{money(bt.grandTotal)}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
 
                   {/* Payment split-up: method, cash/GPay split, advance / credit settlement, balance */}
                   <div className="mt-4 pt-3 border-t border-black/10 space-y-1.5">

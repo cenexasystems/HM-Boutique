@@ -252,7 +252,9 @@ export default function AdminOutstandingCreditsPage() {
     const totals = calculateOrderTotals(ord);
     const balanceFormatted = formatINR(totals.balance);
 
-    const message = `Hello ${custName},\nThis is a friendly reminder from ${BRAND_EN} regarding your pending credit invoice #${invNo} for ₹${balanceFormatted}.\nThank you!`;
+    const dueStr = (ord as any)?.due_date || (ord as any)?.credit_due_date;
+    const dueText = dueStr ? ` The payment is due on ${formatDDMMYYYY(String(dueStr))}.` : "";
+    const message = `Hello ${custName},\nThis is a friendly reminder from ${BRAND_EN} regarding your pending credit invoice #${invNo} for ₹${balanceFormatted}.${dueText}\nThank you!`;
     const link = waLink(ord.customerPhone || ord.phone || "", message);
     if (!link) {
       toast.error("No valid phone number for this customer");

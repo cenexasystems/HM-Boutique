@@ -124,6 +124,7 @@ export default function OutstandingCredits({
         status: override.status !== undefined ? override.status : o.status,
         credit_status: override.credit_status !== undefined ? override.credit_status : o.credit_status,
         credit_due_date: override.credit_due_date !== undefined ? override.credit_due_date : o.credit_due_date,
+        due_date: override.credit_due_date !== undefined ? override.credit_due_date : o.due_date,
         credit_paid_at: override.credit_paid_at !== undefined ? override.credit_paid_at : o.credit_paid_at,
       };
     });
@@ -330,7 +331,9 @@ export default function OutstandingCredits({
     const balance = norm.balance;
     const balanceFormatted = formatINR(balance);
 
-    const message = `Hello ${norm.customerName},\nThis is a friendly reminder from ${BRAND_EN} regarding your pending credit invoice #${orderId} for ₹${balanceFormatted}.\nThank you!`;
+    const dueStr = norm.credit_due_date || norm.due_date;
+    const dueText = dueStr ? ` The payment is due on ${formatDate(String(dueStr))}.` : "";
+    const message = `Hello ${norm.customerName},\nThis is a friendly reminder from ${BRAND_EN} regarding your pending credit invoice #${orderId} for ₹${balanceFormatted}.${dueText}\nThank you!`;
     const link = waLink(phone, message);
     if (!link) {
       toast.error("No valid phone number for this customer");

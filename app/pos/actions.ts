@@ -129,6 +129,7 @@ export async function submitOrder(payload: {
   splitGpay?: number;
   paymentMode: PaymentMode;
   couponCode?: string | null;
+  taxMode?: 'exclusive' | 'inclusive';
   manualDiscountAmount?: number;
   couponDiscountAmount?: number;
   remarks?: string | null;
@@ -205,6 +206,7 @@ export async function createAdvanceOrder(payload: {
   discountAmount?: number;
   discountType?: 'PERCENT' | 'FIXED';
   discountValue?: number;
+  taxMode?: 'exclusive' | 'inclusive';
   manualDiscountAmount?: number;
   couponDiscountAmount?: number;
   couponCode?: string | null;

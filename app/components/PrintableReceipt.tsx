@@ -116,7 +116,7 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
       ? isSettled
         ? "ADVANCE SETTLED"
         : "ADVANCE RECEIVED"
-      : order.payment_method === "UPI" || order.payment_mode === "UPI"
+      : ["UPI", "GPAY"].includes(String(order.payment_method || "").toUpperCase()) || ["UPI", "GPAY"].includes(String(order.payment_mode || "").toUpperCase())
         ? "PAID BY UPI / GPAY"
         : order.payment_method === "CARD" || order.payment_mode === "CARD"
           ? "PAID BY CARD"
@@ -272,7 +272,7 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
           )}
           {totals.gstAmount > 0 ? (
             <div className="flex justify-between">
-              <span>GST @ {totals.gstPercent}% (incl.):</span>
+              <span>GST @ {totals.gstPercent}% ({totals.taxMode === "exclusive" ? "added" : "incl."}):</span>
               <span className="tabular-nums">₹{totals.gstAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
             </div>
           ) : (
@@ -300,7 +300,7 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
             </div>
           )}
           <div className="flex justify-between text-[13px] font-black mt-1.5 pt-1 border-t border-dashed border-black/60">
-            <span>{totals.gstAmount > 0 ? "TOTAL (incl. GST):" : "TOTAL:"}</span>
+            <span>{totals.gstAmount > 0 ? (totals.taxMode === "exclusive" ? "TOTAL (GST added):" : "TOTAL (incl. GST):") : "TOTAL:"}</span>
             <span className="tabular-nums">₹{totals.grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
           </div>
         </div>

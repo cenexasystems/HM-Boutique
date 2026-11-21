@@ -16,6 +16,7 @@ import {
   type MeasurementStatus,
 } from "@/lib/measurements";
 import { toast } from "@/lib/toast";
+import { BRAND_EN, BRAND_ADDRESS, BRAND_PHONE_DISPLAY, BRAND_EMAIL } from "@/lib/brand";
 import { buildXlsx, type XlsxCell } from "@/lib/xlsx";
 
 const PERIODS: { id: MeasurementPeriod; label: string }[] = [
@@ -201,16 +202,24 @@ export default function Measurements({
         ];
         pages.push(`<section class="page">
           <header>
-            <div class="top">
+            <div class="brand">
               <div>
-                <div class="cust">${esc(r.customer_name || "Guest")}</div>
-                <div class="sub">${r.phone ? `Phone: ${esc(r.phone)}` : ""}${r.address ? ` &nbsp;·&nbsp; ${esc(r.address)}` : ""}</div>
+                <div class="shop">${esc(BRAND_EN)}</div>
+                <div class="addr">${esc(BRAND_ADDRESS)}</div>
+                <div class="addr strong">Phone: +91 ${esc(BRAND_PHONE_DISPLAY)} &nbsp;•&nbsp; Email: ${esc(BRAND_EMAIL)}</div>
+                <div class="addr strong">Place of Supply: Tamil Nadu (33)</div>
               </div>
-              <div class="inv">
-                <div class="no">${esc(r.invoice_no)}</div>
-                <div class="sub">Date: ${esc(fmtDate(r.created_at))}</div>
+              <div class="tagwrap">
+                <span class="tag">MEASUREMENT SHEET</span>
+                <div class="no">#${esc(r.invoice_no)}</div>
+                <div class="sub">${esc(fmtDate(r.created_at))}</div>
                 <div class="sub">Status: ${esc(STATUS_STYLE[r.status].label)}</div>
               </div>
+            </div>
+            <div class="billed">
+              <div class="lbl">Billed To</div>
+              <div class="cust">${esc(r.customer_name || "Guest")}</div>
+              <div class="sub">${r.phone ? `+91 ${esc(r.phone)}` : ""}${r.address ? ` &nbsp;·&nbsp; ${esc(r.address)}` : ""}</div>
             </div>
           </header>
 
@@ -246,17 +255,22 @@ export default function Measurements({
       return;
     }
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Measurements</title><style>
-      @page { size: A4 portrait; margin: 10mm; }
+      @page { size: A4 portrait; margin: 8mm; }
       *{box-sizing:border-box}
       html,body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
-      .page{display:flex;flex-direction:column;min-height:274mm;page-break-after:always;padding:2mm 1mm}
+      .page{display:flex;flex-direction:column;min-height:280mm;page-break-after:always;padding:3mm 4mm}
       .page:last-child{page-break-after:auto}
-      header{border-bottom:3px solid #F500A0;padding-bottom:5mm;margin-bottom:6mm}
-      .top{display:flex;justify-content:space-between;align-items:flex-start;gap:8mm}
-      .cust{font-size:28px;font-weight:800;line-height:1.1}
-      .inv{text-align:right}.inv .no{font-size:20px;font-weight:800;color:#F500A0;font-family:"Courier New",monospace}
-      .sub{font-size:14px;color:#333;margin-top:2mm}
-      .item{border:2px solid #222;border-radius:3mm;padding:5mm;margin-bottom:6mm}
+      header{border-bottom:3px solid #F500A0;padding-bottom:4mm;margin-bottom:5mm}
+      .brand{display:flex;justify-content:space-between;align-items:flex-start;gap:8mm;padding-bottom:4mm;border-bottom:1px solid #ddd}
+      .shop{font-size:22px;font-weight:900;letter-spacing:.01em;text-transform:uppercase;line-height:1.15}
+      .addr{font-size:12.5px;color:#444;margin-top:1.5mm;max-width:118mm;line-height:1.35}.addr.strong{color:#111;font-weight:700}
+      .tagwrap{text-align:right;flex-shrink:0}
+      .tag{display:inline-block;background:#FCE7F3;border:1px solid #F9A8D4;color:#F500A0;font-weight:900;font-size:12px;letter-spacing:.08em;padding:1.5mm 3mm;border-radius:2mm}
+      .no{font-size:16px;font-weight:800;font-family:"Courier New",monospace;margin-top:2.5mm}
+      .sub{font-size:13px;color:#444;margin-top:1.2mm}
+      .billed{padding-top:3.5mm}.lbl{font-size:10.5px;font-weight:800;color:#64748b;letter-spacing:.1em;text-transform:uppercase}
+      .cust{font-size:24px;font-weight:800;line-height:1.15;margin-top:1mm}
+      .item{border:2px solid #222;border-radius:3mm;padding:4mm;margin-bottom:5mm}
       .row{display:flex;justify-content:space-between;align-items:flex-start;gap:6mm}
       .name{font-size:24px;font-weight:800}.cnt{font-size:14px;font-weight:600;color:#555}
       .price{text-align:right;font-size:20px;font-weight:700}.due{font-size:14px;font-weight:600;color:#B45309}
@@ -265,15 +279,15 @@ export default function Measurements({
       .cell span{display:block;font-size:11px;font-weight:700;color:#555;text-transform:uppercase;letter-spacing:.05em}
       .cell b{display:block;font-size:17px;margin-top:1mm}
       .h{font-size:13px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:#F500A0;margin:2mm 0 3mm}
-      .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4mm;margin-bottom:6mm}
-      .m{border:2px solid #222;border-radius:3mm;padding:4mm 5mm;min-height:24mm;display:flex;flex-direction:column;justify-content:space-between}
+      .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:4mm;margin-bottom:5mm}
+      .m{border:2px solid #222;border-radius:3mm;padding:5mm 6mm;min-height:26mm;display:flex;flex-direction:column;justify-content:space-between}
       .m span{font-size:13px;font-weight:700;color:#444;text-transform:uppercase;letter-spacing:.04em}
-      .m b{font-size:30px;font-weight:800;line-height:1.1}.m i{font-size:15px;font-style:normal;font-weight:600;color:#444}
+      .m b{font-size:32px;font-weight:800;line-height:1.1}.m i{font-size:15px;font-style:normal;font-weight:600;color:#444}
       .none{font-size:15px;color:#777;margin-bottom:6mm}
-      .remarks{border:1px solid #bbb;border-radius:2mm;padding:4mm 6mm;min-height:22mm;font-size:16px;margin-bottom:6mm}
+      .remarks{border:1px solid #bbb;border-radius:2mm;padding:4mm 6mm;min-height:20mm;font-size:16px;margin-bottom:5mm}
       .remarks ol{margin:0;padding-left:6mm}.remarks li{margin-bottom:1.5mm}
-      .notes{flex:1;min-height:30mm;border:1px solid #bbb;border-radius:2mm;
-        background-image:repeating-linear-gradient(to bottom,transparent 0,transparent 9mm,#ddd 9mm,#ddd 9.3mm)}
+      .notes{flex:1;min-height:28mm;border:1px solid #bbb;border-radius:2mm;
+        background-image:linear-gradient(to bottom,transparent calc(10mm - 1px),#d4d4d4 calc(10mm - 1px));background-size:100% 10mm;background-repeat:repeat}
     </style></head><body>${body}</body></html>`);
     w.document.close();
     w.focus();

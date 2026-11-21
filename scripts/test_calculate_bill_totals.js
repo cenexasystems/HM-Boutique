@@ -195,6 +195,7 @@ function runTests() {
   test("DB Row with both discount_amount and manual_discount_amount: does NOT double discount", () => {
     const dbRow = {
       subtotal: 10000,
+      total: 11796.40, // saved total (GST added on top) - the mode is worked out from it
       discount_amount: 20,
       manual_discount_amount: 20,
       manual_discount_type: 'flat',
