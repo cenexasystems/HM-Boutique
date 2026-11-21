@@ -18,6 +18,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { refreshOnFocus } from "@/lib/focusRefresh";
 import { removeOrder } from "@/app/pos/actions";
 import { BRAND_EN } from "@/lib/brand";
 import { ORDER_STATUS } from "@/lib/orderStatus";
@@ -105,6 +106,9 @@ export default function AdminOrdersPage() {
   const router = useRouter();
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  // show 50 bills at a time - rendering thousands of rows at once freezes the page
+  const PAGE = 50;
+  const [visibleCount, setVisibleCount] = useState<number>(PAGE);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState<string>("");
@@ -198,9 +202,7 @@ export default function AdminOrdersPage() {
   useEffect(() => {
     fetchOrders();
 
-    const handleFocus = () => fetchOrders(true);
-    window.addEventListener("focus", handleFocus);
-    return () => window.removeEventListener("focus", handleFocus);
+    return refreshOnFocus(() => fetchOrders(true));
   }, [fetchOrders]);
 
   // Apply Search, Period, and GST Filters
@@ -266,6 +268,10 @@ export default function AdminOrdersPage() {
 
     return true;
   });
+
+  useEffect(() => {
+    setVisibleCount(PAGE);
+  }, [filteredOrders.length]);
 
   // Calculate Realized Financial Totals strictly across filtered completed orders
   const totalRevenue = filteredOrders.reduce(
@@ -512,7 +518,7 @@ export default function AdminOrdersPage() {
                     </td>
                   </tr>
                 ) : (
-                  filteredOrders.map((o) => {
+                  filteredOrders.slice(0, visibleCount).map((o) => {
                     const custName = o.customers?.name || o.customer_name || "Counter Customer";
                     const custPhone = o.customers?.phone || o.customer_phone || "";
                     const totals = getOrderTotals(o);
@@ -599,6 +605,27 @@ export default function AdminOrdersPage() {
                 )}
               </tbody>
             </table>
+            {filteredOrders.length > visibleCount && (
+              <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-gray-200 bg-gray-50">
+                <span className="text-xs font-bold text-gray-500">
+                  Showing {Math.min(visibleCount, filteredOrders.length).toLocaleString("en-IN")} of {filteredOrders.length.toLocaleString("en-IN")} orders
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setVisibleCount((v) => v + PAGE)}
+                    className="px-4 py-2 rounded-lg bg-[#F500A0] hover:bg-[#D8008D] text-white text-[11px] font-black uppercase tracking-wider cursor-pointer"
+                  >
+                    Show {PAGE} more
+                  </button>
+                  <button
+                    onClick={() => setVisibleCount(filteredOrders.length)}
+                    className="px-4 py-2 rounded-lg border border-gray-300 text-[11px] font-bold hover:bg-gray-100 cursor-pointer"
+                  >
+                    Show all
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
 

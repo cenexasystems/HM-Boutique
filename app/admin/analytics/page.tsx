@@ -15,6 +15,7 @@ import {
   Percent,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { refreshOnFocus } from "@/lib/focusRefresh";
 import { BRAND_EN } from "@/lib/brand";
 import { buildXlsx, type XlsxCell } from "@/lib/xlsx";
 import { summarizeCashflow, dedupeAdvance } from "@/lib/paymentSplit";
@@ -81,15 +82,12 @@ export default function AdminAnalyticsPage() {
 
       // Line items for the product-wise Excel export (chunked to keep URLs short)
       const ids = (sales || []).filter((s: any) => String(s.status || "").toUpperCase() === "COMPLETED").map((s: any) => s.id);
-      const all: any[] = [];
-      for (let i = 0; i < ids.length; i += 100) {
-        const { data: its } = await supabase
-          .from("order_items")
-          .select("*")
-          .in("order_id", ids.slice(i, i + 100));
-        if (its) all.push(...its);
-      }
-      setItemsData(all);
+      const chunks: string[][] = [];
+      for (let i = 0; i < ids.length; i += 100) chunks.push(ids.slice(i, i + 100));
+      const parts = await Promise.all(
+        chunks.map((c) => supabase.from("order_items").select("*").in("order_id", c)),
+      );
+      setItemsData(parts.flatMap((r: any) => r.data || []));
     } catch (err) {
       console.error("[Analytics] Error loading sales data:", err);
     } finally {
@@ -101,9 +99,7 @@ export default function AdminAnalyticsPage() {
   useEffect(() => {
     loadSalesData();
 
-    const handleFocus = () => loadSalesData(true);
-    window.addEventListener("focus", handleFocus);
-    return () => window.removeEventListener("focus", handleFocus);
+    return refreshOnFocus(() => loadSalesData(true));
   }, [loadSalesData]);
 
   // Filter completed sales by selected period

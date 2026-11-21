@@ -979,6 +979,10 @@ export default function POSBilling() {
   const [orderSearchId, setOrderSearchId] = useState("");
   const [orderSearchName, setOrderSearchName] = useState("");
   const [orderSearchPhone, setOrderSearchPhone] = useState("");
+  // Order History shows 50 rows at a time (thousands of rows made the page freeze); the search text is
+  // "deferred" so typing stays instant and the list updates right after.
+  const HISTORY_PAGE = 50;
+  const [historyVisible, setHistoryVisible] = useState(HISTORY_PAGE);
   const [orderFilterSource, setOrderFilterSource] = useState("ALL");
   const [orderFilterStatus, setOrderFilterStatus] = useState("ALL");
   const [historyPeriod, setHistoryPeriod] = useState<
@@ -990,6 +994,12 @@ export default function POSBilling() {
   const [historyEndDate, setHistoryEndDate] = useState<string>(
     new Date().toISOString().split("T")[0],
   );
+  const deferredOrderSearchId = React.useDeferredValue(orderSearchId);
+  const deferredOrderSearchName = React.useDeferredValue(orderSearchName);
+  const deferredOrderSearchPhone = React.useDeferredValue(orderSearchPhone);
+  useEffect(() => {
+    setHistoryVisible(HISTORY_PAGE);
+  }, [orderSearchId, orderSearchName, orderSearchPhone, orderFilterSource, orderFilterStatus, historyPeriod, historyStartDate, historyEndDate]);
 
   const [advPeriod, setAdvPeriod] = useState<
     "all" | "today" | "week" | "month" | "year" | "custom"
@@ -3281,11 +3291,11 @@ export default function POSBilling() {
     }
     const matchId = (order.invoiceNo || order.invoice_no || order.id || "")
       .toLowerCase()
-      .includes(orderSearchId.toLowerCase());
+      .includes(deferredOrderSearchId.toLowerCase());
     const matchName = (order.customerName || order.customer_name || "")
       .toLowerCase()
-      .includes(orderSearchName.toLowerCase());
-    const matchPhone = (order.customerPhone || order.customer_phone || order.phone || "").includes(orderSearchPhone);
+      .includes(deferredOrderSearchName.toLowerCase());
+    const matchPhone = (order.customerPhone || order.customer_phone || order.phone || "").includes(deferredOrderSearchPhone);
     const matchSource =
       orderFilterSource === "ALL" || order.source === orderFilterSource;
     const matchStatus =
@@ -6366,7 +6376,7 @@ export default function POSBilling() {
                           </tr>
                         </thead>
                         <tbody>
-                          {filteredOrders.map((order) => (
+                          {filteredOrders.slice(0, historyVisible).map((order) => (
                             <tr
                               key={order.id}
                               className="border-b border-transparent hover:bg-[#FFFFFF] transition-colors"
@@ -6510,6 +6520,27 @@ export default function POSBilling() {
                           ))}
                         </tbody>
                       </table>
+                      {filteredOrders.length > historyVisible && (
+                        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-t border-black/10 bg-[#FAFAFA]">
+                          <span className="text-xs font-bold text-black/60">
+                            Showing {Math.min(historyVisible, filteredOrders.length).toLocaleString("en-IN")} of {filteredOrders.length.toLocaleString("en-IN")} bills
+                          </span>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setHistoryVisible((v) => v + HISTORY_PAGE)}
+                              className="px-4 py-2 rounded-lg bg-[#F500A0] hover:bg-[#D8008D] text-white text-[11px] font-black uppercase tracking-wider cursor-pointer"
+                            >
+                              Show {HISTORY_PAGE} more
+                            </button>
+                            <button
+                              onClick={() => setHistoryVisible(filteredOrders.length)}
+                              className="px-4 py-2 rounded-lg border border-black/15 text-[11px] font-bold hover:bg-black/5 cursor-pointer"
+                            >
+                              Show all
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   );
                 })()}

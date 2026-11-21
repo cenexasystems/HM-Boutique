@@ -18,6 +18,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { refreshOnFocus } from "@/lib/focusRefresh";
 import { BRAND_EN } from "@/lib/brand";
 import InvoiceModal from "@/app/components/InvoiceModal";
 import PrintableReceipt from "@/app/components/PrintableReceipt";
@@ -144,9 +145,7 @@ export default function AdminOutstandingCreditsPage() {
   useEffect(() => {
     fetchCreditOrders();
 
-    const handleFocus = () => fetchCreditOrders(true);
-    window.addEventListener("focus", handleFocus);
-    return () => window.removeEventListener("focus", handleFocus);
+    return refreshOnFocus(() => fetchCreditOrders(true));
   }, [fetchCreditOrders]);
 
   // Handle Mark as Paid (strictly using real database UUID and try/catch/finally)

@@ -16,6 +16,7 @@ import {
   Share2,
 } from "lucide-react";
 import { supabase } from "@/lib/supabaseClient";
+import { refreshOnFocus } from "@/lib/focusRefresh";
 import { AdvanceOrderStatus } from "@/lib/types";
 import { BRAND_EN, BRAND_PHONE_DISPLAY } from "@/lib/brand";
 import { ORDER_STATUS, ADVANCE_STATUS_DB, STATUS } from "@/lib/orderStatus";
@@ -180,9 +181,7 @@ export default function AdminAdvanceOrdersPage() {
   useEffect(() => {
     loadData();
 
-    const handleFocus = () => loadData(true);
-    window.addEventListener("focus", handleFocus);
-    return () => window.removeEventListener("focus", handleFocus);
+    return refreshOnFocus(() => loadData(true));
   }, [loadData]);
 
   const handleStatusChange = async (orderId: string, newStatus: string, o: any) => {
