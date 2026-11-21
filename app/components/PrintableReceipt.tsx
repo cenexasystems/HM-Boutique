@@ -4,7 +4,7 @@ import React from "react";
 import { BRAND_EN, BRAND_ADDRESS, BRAND_PHONE_DISPLAY, BRAND_EMAIL, DEFAULT_INVOICE_TERMS } from "@/lib/brand";
 import { formatINR } from "@/lib/money";
 import { getOrderTotals, numberToWords } from "@/lib/orderTotals";
-import { buildPaymentRows } from "@/lib/paymentRows";
+import { buildPaymentRows, paymentModeLabel } from "@/lib/paymentRows";
 import InvoiceTotalsBlock from "./InvoiceTotalsBlock";
 
 export interface PrintableReceiptItem {
@@ -108,14 +108,17 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
     hour: "2-digit",
     minute: "2-digit",
   });
+  const combinedMode = paymentModeLabel(order);
   const paymentLabel = isCredit
     ? isSettled
-      ? "CREDIT SETTLED"
+      ? `CREDIT SETTLED · ${combinedMode.replace("CREDIT · PAID BY ", "")}`
       : "CREDIT SALE"
     : isAdvance
       ? isSettled
-        ? "ADVANCE SETTLED"
-        : "ADVANCE RECEIVED"
+        ? `ADVANCE SETTLED · ${combinedMode}`
+        : `ADVANCE RECEIVED · ${combinedMode}`
+      : Number((order as any).advance_paid_earlier) > 0
+        ? `PAID BY ${combinedMode}`
       : ["UPI", "GPAY"].includes(String(order.payment_method || "").toUpperCase()) || ["UPI", "GPAY"].includes(String(order.payment_mode || "").toUpperCase())
         ? "PAID BY UPI / GPAY"
         : order.payment_method === "CARD" || order.payment_mode === "CARD"
@@ -402,7 +405,7 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
           </p>
           <p className="text-xs text-zinc-500 mt-0.5">{formattedDate}</p>
           <p className="text-xs text-zinc-500 mt-0.5 uppercase">
-            Mode: {String(isCredit ? "CREDIT" : (isAdvance ? (order as any).deposit_payment_mode : "") || order.payment_mode || (order as any).payment_method || "CASH").toUpperCase()}
+            Mode: {paymentModeLabel(order)}
           </p>
         </div>
       </div>

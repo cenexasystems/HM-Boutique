@@ -1,7 +1,7 @@
 "use client";
 
 import { summarizeCashflow, dedupeAdvance, allocatePayment } from "@/lib/paymentSplit";
-import { buildPaymentRows } from "@/lib/paymentRows";
+import { buildPaymentRows, paymentModeLabel, advancePaymentSummary } from "@/lib/paymentRows";
 import ExpenseCategoryManager, { type CategoryChanges } from "@/app/components/ExpenseCategoryManager";
 import { loadExpenseCategories, applyCategoryChanges as saveCategoryChanges, DEFAULT_EXPENSE_CATEGORIES } from "@/lib/expenseCategories";
 import { buildXlsx, buildXlsxMulti, type XlsxCell } from "@/lib/xlsx";
@@ -2083,7 +2083,7 @@ export default function POSBilling() {
     }
 
     message += `\n${moneyEmoji} *Total Amount: ₹${orderTotals.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}*\n`;
-    message += `Payment: ${order.paymentMode}${order.paymentMode === "SPLIT" ? ` (Cash ₹${(order.splitCash || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} + GPay ₹${(order.splitGpay || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })})` : ""}\n\n`;
+    message += `Payment: ${paymentModeLabel(order)}${paymentModeLabel(order) === "SPLIT" ? ` (Cash ₹${(order.splitCash || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} + GPay ₹${(order.splitGpay || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })})` : ""}\n\n`;
     message += `${receiptEmoji} View and download your detailed digital receipt here:\n${invoiceUrl}`;
     const encodedMessage = encodeURIComponent(message);
     const cleanPhone = order.customerPhone.replace(/\D/g, "").slice(-10);
@@ -2123,6 +2123,10 @@ export default function POSBilling() {
     message += `Advance order confirmed!\n\n`;
     message += `Order Total: ₹${fmt(receipt.total)}\n`;
     message += `Deposit Paid: ₹${fmt(receipt.deposit)}\n`;
+    {
+      const rm = String((receipt as any).paymentMode || "CASH").toUpperCase();
+      message += `Deposit via: ${rm === "SPLIT" ? `Split (Cash ₹${fmt(Number((receipt as any).splitCash) || 0)} + GPay ₹${fmt(Number((receipt as any).splitGpay) || 0)})` : rm === "GPAY" ? "GPay" : "Cash"}\n`;
+    }
     message += `Balance Due: ₹${fmt(receipt.balance)}\n\n`;
     message += `${receiptEmoji} View your advance receipt here:\n${receiptUrl}`;
     const encoded = encodeURIComponent(message);
@@ -3004,7 +3008,7 @@ export default function POSBilling() {
         r2(t.sgst),
         r2(t.deliveryFee),
         r2(t.grandTotal),
-        modeName(kind === "Credit" ? "CREDIT" : mode),
+        paymentModeLabel(o),
         r2(pay.cash),
         r2(pay.gpay),
         r2(pay.card),
@@ -4089,11 +4093,10 @@ export default function POSBilling() {
                   <span className="text-[9px] font-black text-[#F500A0] bg-black/5 px-2 py-0.5 rounded">
                     {completedBillData.paymentMode === "CREDIT"
                       ? "Credit · Unpaid"
-                      : completedBillData.paymentMode === "SPLIT"
-                        ? "Split · Cash + GPay"
-                        : completedBillData.paymentMode === "GPAY"
-                          ? "GPay"
-                          : "Cash"}
+                      : (() => {
+                          const l = paymentModeLabel(completedBillData);
+                          return l === "SPLIT" ? "Split · Cash + GPay" : l === "GPAY" ? "GPay" : l === "CASH" ? "Cash" : l;
+                        })()}
                   </span>
                 </div>
 
@@ -5569,6 +5572,12 @@ export default function POSBilling() {
                         </div>
                       </div>
 
+                      {advancePaymentSummary(selectedAdvance).slice(0, 1).map((line, i) => (
+                        <div key={i} className="bg-[#F0F9FF] border border-sky-200 rounded-xl px-3.5 py-2.5 text-xs font-bold text-sky-900">
+                          {line}
+                        </div>
+                      ))}
+
                       {/* PAYMENT METHOD */}
                       <div>
                         <label className="block text-[11px] font-bold text-slate-800 tracking-wide uppercase mb-1.5">
@@ -5758,6 +5767,19 @@ export default function POSBilling() {
                       </>
                     );
                   })()}
+
+                  {/* Payment details: deposit method / split, balance method, balance due */}
+                  <div className="bg-white border border-black/10 rounded-lg p-3 text-[11px] space-y-1">
+                    <p className="text-[9px] font-black uppercase tracking-widest text-gray-500 mb-1">
+                      Payment Details · {paymentModeLabel(selectedAdvance)}
+                    </p>
+                    {buildPaymentRows(selectedAdvance).map((r, i) => (
+                      <div key={i} className="flex justify-between gap-3">
+                        <span className="text-[#7C5A52] font-semibold whitespace-pre">{r.label}</span>
+                        <span className={`${r.strong ? "font-black" : "font-bold"} ${r.tone === "good" ? "text-emerald-600" : r.tone === "bad" ? "text-rose-600" : "text-black"}`}>{r.value}</span>
+                      </div>
+                    ))}
+                  </div>
 
                   {selectedAdvance.delivery_date && (
                     <p className="text-[11px] font-bold text-[#7C5A52]"><Calendar className="w-3 h-3 inline mr-1" />Delivery: {new Date(selectedAdvance.delivery_date).toLocaleDateString()}</p>
@@ -6026,6 +6048,9 @@ export default function POSBilling() {
                             <p className="font-bold text-black">Total: ₹{rowTotals.total.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                             <p className="text-[#16A34A] font-bold">Paid: ₹{rowTotals.paid.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                             <p className="text-[#DC2626] font-bold">Balance: ₹{rowTotals.balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                            {advancePaymentSummary(a).map((line, i) => (
+                              <p key={i} className="text-[10px] font-semibold text-[#7C5A52] leading-snug">{line}</p>
+                            ))}
                           </div>
                         );
                       })()}

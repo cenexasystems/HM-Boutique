@@ -16,6 +16,8 @@ import {
   type MeasurementStatus,
 } from "@/lib/measurements";
 import { toast } from "@/lib/toast";
+import PrintOptionsDialog from "./PrintOptionsDialog";
+import { getStoredPrintPrefs, type PrintPrefs } from "./PrintSettingsModal";
 import { BRAND_EN, BRAND_ADDRESS, BRAND_PHONE_DISPLAY, BRAND_EMAIL } from "@/lib/brand";
 import { buildXlsx, type XlsxCell } from "@/lib/xlsx";
 
@@ -60,7 +62,9 @@ export default function Measurements({
   const [openId, setOpenId] = useState<string | null>(null);
   const [showOptions, setShowOptions] = useState(false);
   // In-app print preview (like the invoice preview) - Print happens from inside it
-  const [preview, setPreview] = useState<{ html: string; title: string } | null>(null);
+  const [preview, setPreview] = useState<{ html: string; title: string; list: MeasurementOrder[] } | null>(null);
+  // Print Settings dialog (thermal roll 58/80 mm or sheet A4/A5), same as the invoice print
+  const [printDialog, setPrintDialog] = useState<{ list: MeasurementOrder[]; fromPreview: boolean } | null>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
 
   // Period buttons just fill From/To; the highlighted button is whichever range matches the dates.
@@ -185,9 +189,73 @@ export default function Measurements({
     URL.revokeObjectURL(url);
   };
 
-  // Prints the given bills in a clean, tailor-friendly layout via a popup window.
-  const buildPrintDoc = (list: MeasurementOrder[]): { html: string; title: string } | null => {
+  // Thermal roll (58 / 80 mm): a narrow receipt-style sheet, one page per billed item
+  const buildThermalDoc = (list: MeasurementOrder[], mm: 58 | 80): { html: string; title: string } => {
+    const esc = (v: unknown) =>
+      String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+    const kv = (label: string, value: unknown) => `<div class="kv"><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
+    const sheets: string[] = [];
+    list.forEach((r) => {
+      const total = r.items.length;
+      r.items.forEach((it, idx) => {
+        const filled = MEASUREMENT_FIELDS.filter((f) => it.measurements?.[f.key]);
+        const info: [string, string][] = [
+          ["Front Neck", it.front_neck_type],
+          ["Back Neck", it.back_neck_type],
+          ["Sleeve", it.sleeve_type],
+          ["Sleeve Len", it.sleeve_length],
+        ];
+        sheets.push(`<section class="t">
+          <div class="c shop">${esc(BRAND_EN)}</div>
+          <div class="c sm">${esc(BRAND_ADDRESS)}</div>
+          <div class="c sm">Ph: +91 ${esc(BRAND_PHONE_DISPLAY)}</div>
+          <div class="dash"></div>
+          <div class="c title">MEASUREMENT SHEET</div>
+          ${kv("Bill", "#" + r.invoice_no)}
+          ${kv("Date", fmtDate(r.created_at))}
+          ${kv("Customer", r.customer_name || "Guest")}
+          ${r.phone ? kv("Phone", r.phone) : ""}
+          <div class="dash"></div>
+          <div class="item">${esc(it.item_name || `Item ${idx + 1}`)}${total > 1 ? ` (${idx + 1}/${total})` : ""}</div>
+          ${kv("Qty x Price", `${it.qty || 1} x ₹${Number(it.price || 0).toLocaleString("en-IN")}`)}
+          ${it.due_date ? kv("Due", fmtDate(it.due_date)) : ""}
+          ${info.map(([l, v]) => (v ? kv(l, v) : "")).join("")}
+          <div class="dash"></div>
+          <div class="c title">MEASUREMENTS (cm)</div>
+          ${filled.length ? filled.map((f) => kv(f.label, it.measurements[f.key])).join("") : `<div class="c sm">None recorded</div>`}
+          ${it.remarks?.length ? `<div class="dash"></div><div class="title">REMARKS</div><ol class="rem">${it.remarks.map((m) => `<li>${esc(m)}</li>`).join("")}</ol>` : ""}
+          <div class="sig"><div class="line"></div><div class="sl">Authorized Signature</div></div>
+          <div class="c sm foot">Powered by Cenexa Systems © 2026</div>
+        </section>`);
+      });
+    });
+    const fs = mm === 58 ? 10 : 11.5;
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Measurements</title><style>
+      @page { size: ${mm}mm auto; margin: 0; }
+      *{box-sizing:border-box}
+      html,body{margin:0;padding:0;font-family:"Courier New",monospace;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .t{width:${mm}mm;padding:3mm 3mm 7mm;font-size:${fs}px;line-height:1.35;page-break-after:always}
+      .t:last-child{page-break-after:auto}
+      .c{text-align:center}.shop{font-weight:900;font-size:${fs + 2}px;text-transform:uppercase;line-height:1.2}.sm{font-size:${fs - 1.5}px}
+      .title{font-weight:800;letter-spacing:.06em;margin:1.5mm 0}
+      .dash{border-top:1px dashed #000;margin:2mm 0}
+      .kv{display:flex;justify-content:space-between;gap:2mm}.kv span{flex-shrink:0}.kv b{text-align:right;word-break:break-word}
+      .item{font-weight:900;font-size:${fs + 1}px;margin-bottom:1mm;word-break:break-word}
+      .rem{margin:1mm 0 0;padding-left:4mm}
+      .sig{margin-top:10mm;text-align:center}.sig .line{border-top:1px solid #000;margin:0 4mm 1mm}.sl{font-weight:800}
+      .foot{margin-top:3mm}
+      @media screen{html,body{background:#d9dce1}body{padding:10px 0}.t{margin:0 auto 14px;background:#fff;box-shadow:0 6px 24px rgba(0,0,0,.22)}}
+    </style></head><body>${sheets.join("")}</body></html>`;
+    return { html, title: list.length === 1 ? `#${list[0].invoice_no}` : `${list.length} bills` };
+  };
+
+  // Builds the print document for the chosen printer type / paper size (default: last choice).
+  const buildPrintDoc = (
+    list: MeasurementOrder[],
+    prefs: PrintPrefs = getStoredPrintPrefs(),
+  ): { html: string; title: string } | null => {
     if (list.length === 0) return null;
+    if (prefs.paper === "thermal") return buildThermalDoc(list, prefs.size === "58" ? 58 : 80);
     const esc = (s: unknown) =>
       String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
     // One A4 page per billed item: header, big measurement boxes, remarks and a notes area
@@ -267,7 +335,7 @@ export default function Measurements({
       });
     });
     const body = pages.join("");
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Measurements</title><style>
+    let html = `<!doctype html><html><head><meta charset="utf-8"><title>Measurements</title><style>
       @page { size: A4 portrait; margin: 6mm; }
       *{box-sizing:border-box}
       html,body{margin:0;padding:0;font-family:Arial,Helvetica,sans-serif;color:#000;-webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -315,6 +383,10 @@ export default function Measurements({
       .sigshop{font-size:10.5px;color:#555;margin-top:.5mm}
       .foot{text-align:center;font-size:9.5px;color:#888;border-top:1px solid #e5e5e5;margin-top:4mm;padding-top:2mm}
     </style></head><body>${body}</body></html>`;
+    if (prefs.size === "a5") {
+      // A5 = the A4 design scaled down to fit
+      html = html.replace("@page { size: A4 portrait; margin: 6mm; }", "@page { size: A5 portrait; margin: 4mm; } @media print{html{zoom:.69}}");
+    }
     return {
       html,
       title: list.length === 1 ? `#${list[0].invoice_no}` : `${list.length} bills`,
@@ -324,12 +396,12 @@ export default function Measurements({
   // Preview: opens the preview window (Print is inside it)
   const openPreview = (list: MeasurementOrder[]) => {
     const d = buildPrintDoc(list);
-    if (d) setPreview(d);
+    if (d) setPreview({ ...d, list });
   };
 
   // Print: straight to the print dialog, no preview step
-  const printNow = (list: MeasurementOrder[]) => {
-    const d = buildPrintDoc(list);
+  const printNow = (list: MeasurementOrder[], prefs?: PrintPrefs) => {
+    const d = buildPrintDoc(list, prefs);
     if (!d) return;
     const f = document.createElement("iframe");
     f.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
@@ -344,11 +416,28 @@ export default function Measurements({
     document.body.appendChild(f);
   };
 
+  // Print from inside the preview: ask for printer type / paper size first
   const printFromPreview = () => {
-    const w = previewFrame.current?.contentWindow;
-    if (!w) return;
-    w.focus();
-    w.print();
+    if (preview) setPrintDialog({ list: preview.list, fromPreview: true });
+  };
+
+  const confirmPrint = (prefs: PrintPrefs) => {
+    const pd = printDialog;
+    setPrintDialog(null);
+    if (!pd) return;
+    if (pd.fromPreview) {
+      // show the sheet the way it will print, then print it
+      const d = buildPrintDoc(pd.list, prefs);
+      if (!d) return;
+      setPreview({ ...d, list: pd.list });
+      setTimeout(() => {
+        const w = previewFrame.current?.contentWindow;
+        w?.focus();
+        w?.print();
+      }, 900);
+    } else {
+      printNow(pd.list, prefs);
+    }
   };
 
   const openPreviewFullPage = () => {
@@ -404,6 +493,8 @@ export default function Measurements({
         </div>
       )}
 
+      <PrintOptionsDialog open={Boolean(printDialog)} onClose={() => setPrintDialog(null)} onConfirm={confirmPrint} />
+
       {/* Header: title, period, date range, actions */}
       <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-4">
         <div>
@@ -451,7 +542,7 @@ export default function Measurements({
             <Eye className="w-4 h-4" /> Preview
           </button>
           <button
-            onClick={() => printNow(visible)}
+            onClick={() => setPrintDialog({ list: visible, fromPreview: false })}
             disabled={visible.length === 0}
             className="text-xs font-black uppercase tracking-wider border-2 border-[#F500A0] text-[#F500A0] bg-white hover:bg-[#F500A0]/5 disabled:opacity-40 px-5 py-2.5 rounded-full flex items-center gap-2 cursor-pointer"
           >
@@ -597,7 +688,7 @@ export default function Measurements({
                     <Eye className="w-4 h-4" />
                   </button>
                   <button
-                    onClick={() => printNow([r])}
+                    onClick={() => setPrintDialog({ list: [r], fromPreview: false })}
                     className="p-2.5 rounded-lg bg-pink-50 text-[#F500A0] hover:bg-pink-100 transition-colors cursor-pointer"
                     title="Print"
                     aria-label="Print"
