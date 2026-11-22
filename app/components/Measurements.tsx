@@ -541,13 +541,6 @@ export default function Measurements({
           >
             <Eye className="w-4 h-4" /> Preview
           </button>
-          <button
-            onClick={() => setPrintDialog({ list: visible, fromPreview: false })}
-            disabled={visible.length === 0}
-            className="text-xs font-black uppercase tracking-wider border-2 border-[#F500A0] text-[#F500A0] bg-white hover:bg-[#F500A0]/5 disabled:opacity-40 px-5 py-2.5 rounded-full flex items-center gap-2 cursor-pointer"
-          >
-            <Printer className="w-4 h-4" /> Print
-          </button>
         </div>
       </div>
 
