@@ -312,8 +312,8 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
         <div className="text-[11px] py-1.5 border-b border-dashed border-black/60 mb-2 space-y-1">
           {payRows.map((r, i) => (
             <div key={i} className="flex justify-between gap-2">
-              <span className="whitespace-pre">{r.label}</span>
-              <span className={`tabular-nums ${r.strong ? "font-bold" : ""}`}>{r.value}</span>
+              <span className="min-w-0 break-words whitespace-pre-wrap">{r.label}</span>
+              <span className={`tabular-nums shrink-0 whitespace-nowrap ${r.strong ? "font-bold" : ""}`}>{r.value}</span>
             </div>
           ))}
         </div>
@@ -531,9 +531,9 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
           <div className="text-xs space-y-2 pt-2 border-t border-zinc-100">
             {payRows.map((r, i) => (
               <div key={i} className="flex justify-between items-center py-0.5 gap-3">
-                <span className="text-slate-600 font-medium whitespace-pre">{r.label}</span>
+                <span className="text-slate-600 font-medium min-w-0 break-words whitespace-pre-wrap">{r.label}</span>
                 <span
-                  className={`font-mono tabular-nums ${r.strong ? "font-bold" : "font-medium"} ${
+                  className={`font-mono tabular-nums shrink-0 whitespace-nowrap ${r.strong ? "font-bold" : "font-medium"} ${
                     r.tone === "good" ? "text-emerald-600" : r.tone === "bad" ? "text-rose-600" : "text-slate-900"
                   }`}
                 >

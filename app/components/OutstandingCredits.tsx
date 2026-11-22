@@ -31,6 +31,7 @@ import { isUuid } from "@/lib/ids";
 import { toast } from "@/lib/toast";
 import { completeOrder, type SettlementPayment } from "@/lib/completeOrder";
 import SettlePaymentModal from "@/app/components/SettlePaymentModal";
+import SettledBillPopup from "@/app/components/SettledBillPopup";
 import { calculateOrderTotals } from "@/lib/orderTotals";
 
 export interface OutstandingCreditsProps {
@@ -108,6 +109,7 @@ export default function OutstandingCredits({
   const [toDate, setToDate] = useState("");
   const [settlingId, setSettlingId] = useState<string | null>(null);
   const [pendingSettle, setPendingSettle] = useState<any | null>(null);
+  const [settledBill, setSettledBill] = useState<any | null>(null);
   const [savingDueDateId, setSavingDueDateId] = useState<string | null>(null);
   const [localOverrides, setLocalOverrides] = useState<
     Record<string, { status?: string; credit_status?: "outstanding" | "paid"; credit_due_date?: string; credit_paid_at?: string }>
@@ -253,6 +255,11 @@ export default function OutstandingCredits({
         },
       }));
 
+      // Show the "Bill Generated" popup for the now-paid bill
+      try {
+        setSettledBill(normalizeOrder({ ...norm, ...updated, items: norm.items, order_items: norm.items }));
+      } catch {}
+
       router.refresh();
       if (onOrdersUpdated) await onOrdersUpdated();
       toast.success('Marked as paid');
@@ -397,6 +404,12 @@ export default function OutstandingCredits({
         balance={pendingBalance}
         onClose={() => setPendingSettle(null)}
         onConfirm={(pay) => void doSettle(pendingSettle, pay)}
+      />
+      <SettledBillPopup
+        order={settledBill}
+        onClose={() => setSettledBill(null)}
+        onView={onViewInvoice ? (o) => onViewInvoice(o.id) : undefined}
+        onPrint={onPrintInvoice ? (o) => onPrintInvoice(o.id) : undefined}
       />
       {/* ── HEADER ── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

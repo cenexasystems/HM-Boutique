@@ -31,6 +31,7 @@ import { toast } from "@/lib/toast";
 import { completeOrder, type SettlementPayment } from "@/lib/completeOrder";
 import CreditDueNotifier from "@/app/components/CreditDueNotifier";
 import SettlePaymentModal from "@/app/components/SettlePaymentModal";
+import SettledBillPopup from "@/app/components/SettledBillPopup";
 import { calculateOrderTotals } from "@/lib/orderTotals";
 import { createPortal } from "react-dom";
 
@@ -107,6 +108,7 @@ export default function AdminOutstandingCreditsPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [pendingSettle, setPendingSettle] = useState<CreditOrderRecord | null>(null);
   const [printOrder, setPrintOrder] = useState<any | null>(null);
+  const [settledBill, setSettledBill] = useState<any | null>(null);
 
   // Fetch live credit orders directly from Supabase
   const fetchCreditOrders = useCallback(async (isRefresh = false) => {
@@ -163,6 +165,9 @@ export default function AdminOutstandingCreditsPage() {
     setSavingId(row.id);
     try {
       const updated = await completeOrder(supabase, row, payment);
+      try {
+        setSettledBill(normalizeOrder({ ...row, ...updated, items: (row as any).items, order_items: (row as any).items }));
+      } catch {}
 
       // row moves OUTSTANDING -> HISTORY in state without full page reload
       setCreditOrders((prev) =>
@@ -351,6 +356,12 @@ export default function AdminOutstandingCreditsPage() {
         busy={Boolean(savingId)}
         onClose={() => setPendingSettle(null)}
         onConfirm={(pay) => pendingSettle && void doSettle(pendingSettle, pay)}
+      />
+      <SettledBillPopup
+        order={settledBill}
+        onClose={() => setSettledBill(null)}
+        onView={(o) => openInvoice(o)}
+        onPrint={(o) => handlePrintInvoice(o)}
       />
       <div className="max-w-7xl mx-auto space-y-6">
         {/* Header Bar */}
