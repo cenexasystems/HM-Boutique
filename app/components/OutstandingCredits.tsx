@@ -402,6 +402,7 @@ export default function OutstandingCredits({
         open={Boolean(pendingSettle)}
         title={`Settle #${pendingNorm?.invoiceNo || pendingNorm?.invoice_no || ""} · ${pendingNorm?.customer_name || ""}`}
         balance={pendingBalance}
+        order={pendingNorm}
         onClose={() => setPendingSettle(null)}
         onConfirm={(pay) => void doSettle(pendingSettle, pay)}
       />

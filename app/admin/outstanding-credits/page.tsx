@@ -353,6 +353,7 @@ export default function AdminOutstandingCreditsPage() {
         open={Boolean(pendingSettle)}
         title={`Settle #${pendingSettle?.invoiceNo || pendingSettle?.invoice_no || ""} · ${pendingSettle?.customer_name || ""}`}
         balance={pendingSettle ? calculateOrderTotals(pendingSettle).balance : 0}
+        order={pendingSettle}
         busy={Boolean(savingId)}
         onClose={() => setPendingSettle(null)}
         onConfirm={(pay) => pendingSettle && void doSettle(pendingSettle, pay)}
