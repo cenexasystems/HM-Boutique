@@ -382,8 +382,9 @@ export default function PrintableReceipt({ order, paper, size }: PrintableReceip
             {BRAND_ADDRESS}
           </p>
           <p className="text-xs text-zinc-600 mt-1 font-medium">
-            Phone: +91 {BRAND_PHONE_DISPLAY} • Email: {BRAND_EMAIL}
+            Phone: +91 {BRAND_PHONE_DISPLAY}
           </p>
+          {BRAND_EMAIL && <p className="text-xs text-zinc-600 font-medium">Email: {BRAND_EMAIL}</p>}
           {isGst && (
             <p className="text-xs text-zinc-800 font-semibold mt-1">
               Place of Supply: Tamil Nadu (33)

@@ -277,7 +277,8 @@ export default function Measurements({
               <div>
                 <div class="shop">${esc(BRAND_EN)}</div>
                 <div class="addr">${esc(BRAND_ADDRESS)}</div>
-                <div class="addr strong">Phone: +91 ${esc(BRAND_PHONE_DISPLAY)} &nbsp;•&nbsp; Email: ${esc(BRAND_EMAIL)}</div>
+                <div class="addr strong">Phone: +91 ${esc(BRAND_PHONE_DISPLAY)}</div>
+                <div class="addr strong">Email: ${esc(BRAND_EMAIL)}</div>
                 <div class="addr strong">Place of Supply: Tamil Nadu (33)</div>
               </div>
               <div class="tagwrap">
