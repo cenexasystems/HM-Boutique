@@ -7290,7 +7290,7 @@ export default function POSBilling() {
                 </div>
 
                 {/* Money received by payment mode (split bills divided into Cash and GPay) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
                   {[
                     { key: "cash", label: "Cash", amount: payTotals.cash, note: `${payTotals.cashBills} bill${payTotals.cashBills === 1 ? "" : "s"}`, color: "#10B981" },
                     { key: "gpay", label: "GPay / UPI", amount: payTotals.gpay, note: `${payTotals.gpayBills} bill${payTotals.gpayBills === 1 ? "" : "s"}`, color: "#3E6F8E" },
@@ -7301,7 +7301,6 @@ export default function POSBilling() {
                       note: `${payTotals.splitBills} bill${payTotals.splitBills === 1 ? "" : "s"} · Cash ₹${formatINR(payTotals.splitCash)} + GPay ₹${formatINR(payTotals.splitGpay)}`,
                       color: "#F500A0",
                     },
-                    { key: "card", label: "Card", amount: payTotals.card, note: `${payTotals.cardBills} bill${payTotals.cardBills === 1 ? "" : "s"}`, color: "#8B5CF6" },
                   ].map((b) => (
                     <div key={b.key} className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                       <div className="flex justify-between items-start mb-3">

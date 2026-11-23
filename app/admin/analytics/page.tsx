@@ -411,7 +411,7 @@ export default function AdminAnalyticsPage() {
 
         {/* Money received by payment mode. Split bills are divided into Cash and GPay;
             credit counts once it is paid; advance deposits count while the order is pending. */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
           {[
             { label: "Cash", amount: pay.cash, note: `${pay.cashBills} bill${pay.cashBills === 1 ? "" : "s"}`, cls: "bg-emerald-50 text-emerald-600" },
             { label: "GPay / UPI", amount: pay.gpay, note: `${pay.gpayBills} bill${pay.gpayBills === 1 ? "" : "s"}`, cls: "bg-blue-50 text-blue-600" },
@@ -421,7 +421,6 @@ export default function AdminAnalyticsPage() {
               note: `${pay.splitBills} bill${pay.splitBills === 1 ? "" : "s"} · Cash ₹${formatINR(pay.splitCash)} + GPay ₹${formatINR(pay.splitGpay)}`,
               cls: "bg-pink-50 text-[#F500A0]",
             },
-            { label: "Card", amount: pay.card, note: `${pay.cardBills} bill${pay.cardBills === 1 ? "" : "s"}`, cls: "bg-violet-50 text-violet-600" },
           ].map((b) => (
             <div key={b.label} className="bg-white p-5 rounded-2xl border border-gray-200 shadow-xs flex flex-col justify-between">
               <div className="flex justify-between items-start mb-2">
